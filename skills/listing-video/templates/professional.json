@@ -1,0 +1,49 @@
+{
+  "name": "professional",
+  "description": "Clean, modern, balanced — the safe default that works for everything",
+  "video": {
+    "default_duration": 30,
+    "clip_durations": {
+      "hero": 4,
+      "standard": 3,
+      "cta": 4
+    },
+    "transitions": {
+      "into_ai_clip": {"type": "cut", "duration": 0},
+      "out_of_ai_clip": {"type": "crossfade", "duration": 0.5},
+      "between_slides": {"type": "crossfade", "duration": 0.5},
+      "into_cta": {"type": "fade_black", "duration": 0.6}
+    },
+    "ken_burns": {
+      "zoom_range": [1.0, 1.12],
+      "preferred_motions": ["slow_push", "pull_back", "slide_left"]
+    }
+  },
+  "text": {
+    "font_family": "Inter-SemiBold",
+    "title_size": 56,
+    "subtitle_size": 38,
+    "color": "#FFFFFF",
+    "shadow": true,
+    "shadow_color": "#000000",
+    "shadow_opacity": 0.6,
+    "position": "bottom_center",
+    "animation": "fade"
+  },
+  "music": {
+    "style": "modern_chill",
+    "bpm_range": [85, 110],
+    "volume": 0.11,
+    "fade_in": 0.8,
+    "fade_out": 2.0,
+    "duck_under_voice": true
+  },
+  "cta": {
+    "bg_color": "#111111",
+    "text_color": "#FFFFFF",
+    "accent_color": "#4A90D9",
+    "tagline_size": 52,
+    "name_size": 46,
+    "phone_size": 38
+  }
+}
