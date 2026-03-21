@@ -153,22 +153,48 @@ def scene_plan_to_storyboard(scenes: list[dict], photo_dir: str) -> dict:
     return {"storyboard": storyboard_entries}
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: plan_scenes.py <photo_dir> [property_info_file] [language]")
-        print("Returns a Claude API request dict for scene planning.")
-        sys.exit(1)
+def plan_scenes_live(
+    photo_filenames: list[str],
+    property_info: str,
+    language: str = "en",
+    photo_images: list[dict] = None,
+) -> list[dict]:
+    """
+    Call Claude to plan the video scene sequence. Returns parsed scene list.
 
+    This is the live version that actually calls the API.
+    """
+    from api_client import call_claude
+
+    request = build_scene_plan_request(
+        photo_filenames=photo_filenames,
+        property_info=property_info,
+        language=language,
+        photo_images=photo_images,
+    )
+    text = call_claude(request)
+    return parse_scene_plan(text)
+
+
+if __name__ == "__main__":
+    import argparse
     import os
 
-    photo_dir = sys.argv[1]
-    photos = sorted(f for f in os.listdir(photo_dir) if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+    parser = argparse.ArgumentParser(description="AI scene planning for listing video")
+    parser.add_argument("--live", action="store_true", help="Call Claude API")
+    parser.add_argument("--photo-dir", required=True, help="Directory containing photos")
+    parser.add_argument("--property-info", default="", help="Property description text")
+    parser.add_argument("--language", default="en", help="Language for narration")
+    args = parser.parse_args()
 
-    prop_info = ""
-    if len(sys.argv) > 2 and os.path.isfile(sys.argv[2]):
-        prop_info = Path(sys.argv[2]).read_text()
+    photos = sorted(f for f in os.listdir(args.photo_dir)
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
 
-    language = sys.argv[3] if len(sys.argv) > 3 else "en"
+    if args.live:
+        from analyze_photos import encode_image
+        photo_images = [encode_image(os.path.join(args.photo_dir, f)) for f in photos]
+        result = plan_scenes_live(photos, args.property_info, args.language, photo_images)
+    else:
+        result = build_scene_plan_request(photos, args.property_info, args.language)
 
-    request = build_scene_plan_request(photos, prop_info, language)
-    print(json.dumps(request, indent=2, default=str))
+    print(json.dumps(result, indent=2, default=str))

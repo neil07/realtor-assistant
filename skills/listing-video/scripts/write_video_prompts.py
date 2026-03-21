@@ -129,14 +129,48 @@ def build_batch_prompt_requests(scenes: list[dict], photo_dir: str) -> list[dict
     return requests
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: write_video_prompts.py <first_frame> <scene_desc> [last_frame]")
-        sys.exit(1)
+def write_prompts_live(scenes: list[dict], photo_dir: str) -> list[dict]:
+    """
+    Call Claude Vision to write motion prompts for each scene.
+    Returns the scene list with "motion_prompt" populated.
 
-    req = build_prompt_request(
-        first_frame_path=sys.argv[1],
-        scene_desc=sys.argv[2],
-        last_frame_path=sys.argv[3] if len(sys.argv) > 3 else None,
-    )
-    print(json.dumps(req, indent=2, default=str))
+    This is the live version that actually calls the API per scene.
+    """
+    import os
+    from api_client import call_claude
+
+    batch = build_batch_prompt_requests(scenes, photo_dir)
+
+    # Build lookup for results
+    prompt_map = {}
+    for seq, req in batch:
+        text = call_claude(req)
+        prompt_map[seq] = parse_prompt_response(text)
+
+    # Merge prompts back into scene list
+    for scene in scenes:
+        seq = scene["sequence"]
+        if seq in prompt_map:
+            scene["motion_prompt"] = prompt_map[seq]
+
+    return scenes
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Write AI video prompts per scene")
+    parser.add_argument("--live", action="store_true", help="Call Claude Vision API")
+    parser.add_argument("--scene-plan-file", required=True, help="Scene plan JSON file")
+    parser.add_argument("--photo-dir", required=True, help="Directory containing photos")
+    args = parser.parse_args()
+
+    scenes = json.loads(Path(args.scene_plan_file).read_text())
+
+    if args.live:
+        result = write_prompts_live(scenes, args.photo_dir)
+    else:
+        batch = build_batch_prompt_requests(scenes, args.photo_dir)
+        result = [{"sequence": seq, "request_preview": "..."} for seq, req in batch]
+
+    print(json.dumps(result, indent=2, default=str))

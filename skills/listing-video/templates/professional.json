@@ -36,7 +36,15 @@
     "volume": 0.11,
     "fade_in": 0.8,
     "fade_out": 2.0,
-    "duck_under_voice": true
+    "duck_under_voice": true,
+    "ducked_volume": 0.03,
+    "duck_attack": 0.3,
+    "duck_release": 0.5
+  },
+  "ambient": {
+    "enabled": true,
+    "volume": 0.08,
+    "fade_duration": 0.5
   },
   "cta": {
     "bg_color": "#111111",

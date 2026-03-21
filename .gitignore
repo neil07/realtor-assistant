@@ -7,5 +7,11 @@ memory/
 # Skill 产出文件（视频/音频/图片等大文件）
 skills/listing-video/output/
 
-# 音乐素材（二进制大文件）
-skills/listing-video/assets/music/
+# 音乐素材（二进制大文件，保留 .gitkeep）
+skills/listing-video/assets/music/**/*.mp3
+skills/listing-video/assets/music/**/*.wav
+skills/listing-video/assets/sounds/**/*.mp3
+skills/listing-video/assets/sounds/**/*.wav
+
+# 环境变量
+.env

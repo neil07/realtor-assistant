@@ -15,6 +15,7 @@ For each photo, provide:
       "style": "modern|traditional|mediterranean|craftsman|farmhouse|contemporary|colonial|mid_century",
       "quality_score": 8,
       "quality_issues": ["slightly dark", "slightly tilted"],
+      "sky_condition": "clear|overcast|sunset|night|indoor",
       "ai_video_worthy": true,
       "ai_video_reason": "Pool with water — dynamic motion will look stunning",
       "suggested_motion": "slow_push|pull_back|slide_left|slide_right|crane_down|orbit|zoom_in|static",

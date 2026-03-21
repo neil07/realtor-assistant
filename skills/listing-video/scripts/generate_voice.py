@@ -16,9 +16,29 @@ ELEVENLABS_API = "https://api.elevenlabs.io/v1"
 # Default voices for different styles
 DEFAULT_VOICES = {
     "male_energetic": "pNInz6obpgDQGcFmaJgB",     # Adam
-    "male_professional": "ErXwobaYiN019PkySvjV",    # Antoni  
+    "male_professional": "ErXwobaYiN019PkySvjV",    # Antoni
     "female_energetic": "EXAVITQu4vr4xnSDxMaL",    # Bella
     "female_professional": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+}
+
+# Emotion → ElevenLabs voice_settings overrides
+EMOTION_PROFILES = {
+    "excitement": {"stability": 0.35, "style_exaggeration": 0.55, "speed_factor": 1.05},
+    "warmth":     {"stability": 0.55, "style_exaggeration": 0.30, "speed_factor": 0.95},
+    "confidence": {"stability": 0.50, "style_exaggeration": 0.40, "speed_factor": 1.0},
+    "urgency":    {"stability": 0.40, "style_exaggeration": 0.50, "speed_factor": 1.10},
+    "neutral":    {"stability": 0.50, "style_exaggeration": 0.30, "speed_factor": 1.0},
+}
+
+# Property tier + style → default voice selection
+_VOICE_MAP = {
+    ("luxury", "elegant"): "male_professional",
+    ("luxury", "energetic"): "male_energetic",
+    ("luxury", "professional"): "male_professional",
+    ("mid_range", "elegant"): "female_professional",
+    ("mid_range", "energetic"): "male_energetic",
+    ("mid_range", "professional"): "male_professional",
+    ("starter", "energetic"): "female_energetic",
 }
 
 
@@ -30,10 +50,11 @@ def generate_elevenlabs(
     stability: float = 0.5,
     similarity_boost: float = 0.75,
     style_exaggeration: float = 0.3,
+    emotion_profile: dict = None,
 ) -> dict:
     """
     Generate voiceover using ElevenLabs API.
-    
+
     Args:
         text: Voiceover script
         output_path: Where to save the MP3/WAV
@@ -42,19 +63,25 @@ def generate_elevenlabs(
         stability: Voice stability (lower = more expressive)
         similarity_boost: How close to original voice
         style_exaggeration: Amount of style enhancement
+        emotion_profile: Optional dict overriding stability/style_exaggeration
     """
     api_key = os.environ.get("ELEVENLABS_API_KEY")
     if not api_key:
         return {"status": "error", "message": "ELEVENLABS_API_KEY not set"}
-    
+
     if not voice_id:
         voice_id = DEFAULT_VOICES.get(f"male_{style}", DEFAULT_VOICES["male_professional"])
-    
+
+    # Apply emotion profile overrides
+    if emotion_profile:
+        stability = emotion_profile.get("stability", stability)
+        style_exaggeration = emotion_profile.get("style_exaggeration", style_exaggeration)
+
     headers = {
         "xi-api-key": api_key,
         "Content-Type": "application/json",
     }
-    
+
     payload = {
         "text": text,
         "model_id": "eleven_v3",
@@ -323,20 +350,210 @@ def generate_scene_voiceovers(
     return results
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: generate_voice.py <script_text_or_file> <output_path> [voice_id]")
-        sys.exit(1)
-    
-    text_input = sys.argv[1]
-    if os.path.isfile(text_input):
-        text = Path(text_input).read_text()
+def determine_scene_emotion(
+    scene_desc: str,
+    text_narration: str,
+    room_type: str = "",
+    sequence: int = 1,
+    total_scenes: int = 1,
+) -> str:
+    """
+    Rule-based emotion assignment per scene.
+    No LLM needed — uses scene position, room type, and keywords.
+    """
+    desc_lower = (scene_desc + " " + text_narration).lower()
+
+    # Position-based
+    if sequence == 1:
+        return "excitement"
+    if sequence >= total_scenes:
+        return "urgency"
+
+    # Room-type heuristics
+    if any(kw in desc_lower for kw in ["pool", "view", "ocean", "sunset", "wow", "stunning"]):
+        return "excitement"
+    if any(kw in desc_lower for kw in ["bedroom", "master", "suite", "cozy", "retreat"]):
+        return "warmth"
+    if any(kw in desc_lower for kw in ["kitchen", "granite", "appliance", "island"]):
+        return "confidence"
+    if any(kw in desc_lower for kw in ["price", "won't last", "weekend", "call"]):
+        return "urgency"
+
+    return "neutral"
+
+
+def select_voice_for_property(
+    property_tier: str = "mid_range",
+    property_style: str = "professional",
+    agent_gender: str = None,
+) -> str:
+    """Select an appropriate default voice based on property personality."""
+    if agent_gender:
+        gender = agent_gender
     else:
-        text = text_input
-    
-    result = generate_voiceover(
-        text=text,
-        output_path=sys.argv[2],
-        voice_id=sys.argv[3] if len(sys.argv) > 3 else None,
-    )
-    print(json.dumps(result, indent=2))
+        gender = "male"  # default
+
+    key = (property_tier, property_style)
+    voice_key = _VOICE_MAP.get(key, f"{gender}_professional")
+    return DEFAULT_VOICES.get(voice_key, DEFAULT_VOICES["male_professional"])
+
+
+def generate_scene_voiceovers_v2(
+    scenes: list[dict],
+    output_dir: str,
+    voice_id: str = None,
+    style: str = "professional",
+    property_tier: str = "mid_range",
+) -> list[dict]:
+    """
+    Generate emotion-aware per-scene TTS.
+
+    Each scene gets an emotion profile that adjusts voice stability,
+    style exaggeration, and speed for appropriate emotional delivery.
+    """
+    from job_logger import get_logger, log_step_start, log_step_end
+
+    logger = get_logger()
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Auto-select voice if not provided
+    if not voice_id:
+        voice_id = select_voice_for_property(property_tier, style)
+
+    results = []
+    narrated = [s for s in scenes if s.get("text_narration", "").strip()]
+    total = len(narrated)
+
+    log_step_start("per_scene_tts_v2", {
+        "total_scenes": total,
+        "voice_id": voice_id,
+        "style": style,
+        "emotion_aware": True,
+    })
+
+    for scene in narrated:
+        seq = scene["sequence"]
+        text = scene["text_narration"].strip()
+        audio_path = os.path.join(output_dir, f"narration_{seq:02d}.mp3")
+
+        # Determine emotion
+        emotion = determine_scene_emotion(
+            scene_desc=scene.get("scene_desc", ""),
+            text_narration=text,
+            sequence=seq,
+            total_scenes=total,
+        )
+        emo_profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
+
+        logger.info("  TTS scene %02d: emotion=%s  %d chars", seq, emotion, len(text))
+
+        # Try ElevenLabs with emotion profile
+        result = generate_elevenlabs(
+            text=text,
+            output_path=audio_path,
+            voice_id=voice_id,
+            style=style,
+            emotion_profile=emo_profile,
+        )
+
+        # Fallback to OpenAI with speed adjustment
+        if result["status"] != "success":
+            logger.warning("  ElevenLabs failed for scene %d, trying OpenAI", seq)
+            result = generate_openai_tts(
+                text=text,
+                output_path=audio_path,
+                speed=emo_profile.get("speed_factor", 1.0),
+            )
+
+        if result["status"] == "success":
+            import subprocess
+            dur_cmd = [
+                "ffprobe", "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "json", audio_path,
+            ]
+            dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
+            duration = 0.0
+            if dur_result.returncode == 0:
+                import json as _json
+                dur_data = _json.loads(dur_result.stdout)
+                duration = float(dur_data.get("format", {}).get("duration", 0))
+
+            results.append({
+                "sequence": seq,
+                "audio_path": audio_path,
+                "duration": duration,
+                "text": text,
+                "emotion": emotion,
+                "status": "success",
+            })
+        else:
+            results.append({
+                "sequence": seq,
+                "audio_path": None,
+                "duration": 0,
+                "text": text,
+                "emotion": emotion,
+                "status": "error",
+                "message": result.get("message", ""),
+            })
+
+    log_step_end("per_scene_tts_v2", {
+        "status": "success",
+        "succeeded": sum(1 for r in results if r["status"] == "success"),
+        "total_duration": sum(r["duration"] for r in results),
+    })
+
+    return results
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate TTS voiceover")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Single text TTS
+    single = subparsers.add_parser("single", help="Generate TTS for a single text")
+    single.add_argument("text", help="Text string or file path")
+    single.add_argument("output", help="Output audio path")
+    single.add_argument("--voice-id", default=None, help="ElevenLabs voice ID")
+    single.add_argument("--style", default="professional", help="Voice style")
+
+    # Batch per-scene TTS
+    batch = subparsers.add_parser("batch", help="Generate per-scene TTS from scene plan")
+    batch.add_argument("--scene-plan-file", required=True, help="Scene plan JSON file")
+    batch.add_argument("--output-dir", required=True, help="Output directory for narration files")
+    batch.add_argument("--voice-id", default=None, help="ElevenLabs voice ID")
+    batch.add_argument("--style", default="professional", help="Voice style")
+    batch.add_argument("--emotion-aware", action="store_true", help="Use emotion-aware TTS (V2)")
+    batch.add_argument("--property-tier", default="mid_range", help="Property tier for voice selection")
+
+    args = parser.parse_args()
+
+    if args.command == "single":
+        text = args.text
+        if os.path.isfile(text):
+            text = Path(text).read_text()
+        result = generate_voiceover(text=text, output_path=args.output,
+                                    voice_id=args.voice_id, style=args.style)
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "batch":
+        scenes = json.loads(Path(args.scene_plan_file).read_text())
+        if args.emotion_aware:
+            results = generate_scene_voiceovers_v2(
+                scenes=scenes, output_dir=args.output_dir,
+                voice_id=args.voice_id, style=args.style,
+                property_tier=args.property_tier,
+            )
+        else:
+            results = generate_scene_voiceovers(
+                scenes=scenes, output_dir=args.output_dir,
+                voice_id=args.voice_id, style=args.style,
+            )
+        print(json.dumps(results, indent=2))
+
+    else:
+        parser.print_help()
+        sys.exit(1)

@@ -54,6 +54,7 @@ Patterns that work:
 
 DO NOT say: "Contact me for more information" / "Schedule a showing today"
 
+{creative_direction}
 ## Input Data
 
 ```

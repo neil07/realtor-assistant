@@ -123,11 +123,30 @@ def format_analysis_message(analysis: dict) -> str:
     return "\n".join(lines)
 
 
+def analyze_photos_live(photo_paths: list[str]) -> dict:
+    """
+    Call Claude Vision to analyze listing photos. Returns parsed analysis dict.
+
+    This is the live version that actually calls the API, as opposed to
+    analyze_photos() which only builds the request dict.
+    """
+    from api_client import call_claude_json
+
+    request = analyze_photos(photo_paths)
+    return call_claude_json(request)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: analyze_photos.py <photo1> [photo2] ...")
-        sys.exit(1)
-    
-    paths = sys.argv[1:]
-    request = analyze_photos(paths)
-    print(json.dumps(request, indent=2, default=str))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Analyze listing photos using Claude Vision")
+    parser.add_argument("photos", nargs="+", help="Photo file paths")
+    parser.add_argument("--live", action="store_true", help="Call Claude API (not just build request)")
+    args = parser.parse_args()
+
+    if args.live:
+        result = analyze_photos_live(args.photos)
+    else:
+        result = analyze_photos(args.photos)
+
+    print(json.dumps(result, indent=2, default=str))

@@ -494,9 +494,11 @@ def generate_all_clips_v2(
         if progress_callback:
             progress_callback(f"Generating scene {i}/{total}: {scene.get('scene_desc', '')[:40]}...")
 
-        # Use AI-written prompt, fall back to template
-        motion_prompt = scene.get("motion_prompt") or build_motion_prompt(
-            room_type="other", highlights=[], style="cinematic",
+        # Priority: cinematic_motion prompt > write_prompts prompt > template fallback
+        motion_prompt = (
+            scene.get("ai_motion_prompt")
+            or scene.get("motion_prompt")
+            or build_motion_prompt(room_type="other", highlights=[], style="cinematic")
         )
 
         # Estimate duration from narration (~3.5 words/sec), clamp to 5-10s
@@ -553,14 +555,51 @@ def generate_all_clips_v2(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: render_ai_video.py <image_path> <motion_prompt> [duration] [output_path]")
-        sys.exit(1)
+    import argparse
 
-    result = generate_seedance_clip(
-        image_path=sys.argv[1],
-        motion_prompt=sys.argv[2],
-        duration=int(sys.argv[3]) if len(sys.argv) > 3 else 5,
-        output_path=sys.argv[4] if len(sys.argv) > 4 else None,
-    )
-    print(json.dumps(result, indent=2))
+    parser = argparse.ArgumentParser(description="Generate AI video clips")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Single clip
+    single = subparsers.add_parser("single", help="Generate single AI clip")
+    single.add_argument("image", help="Input image path")
+    single.add_argument("prompt", help="Motion prompt")
+    single.add_argument("--duration", type=int, default=5, help="Duration in seconds")
+    single.add_argument("--output", default=None, help="Output video path")
+    single.add_argument("--last-frame", default=None, help="Last frame image path")
+    single.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio")
+
+    # Batch from scene plan
+    batch = subparsers.add_parser("batch", help="Generate all clips from scene plan")
+    batch.add_argument("--scene-plan-file", required=True, help="Scene plan JSON file")
+    batch.add_argument("--photo-dir", required=True, help="Photo directory")
+    batch.add_argument("--output-dir", required=True, help="Output directory")
+    batch.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio")
+
+    args = parser.parse_args()
+
+    if args.command == "single":
+        result = generate_seedance_clip(
+            image_path=args.image, motion_prompt=args.prompt,
+            duration=args.duration, output_path=args.output,
+            last_frame_path=args.last_frame, aspect_ratio=args.aspect_ratio,
+        )
+        if result["status"] == "error":
+            result = generate_runway_clip(
+                image_path=args.image, motion_prompt=args.prompt,
+                duration=args.duration, output_path=args.output,
+                aspect_ratio=args.aspect_ratio,
+            )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "batch":
+        scene_plan = json.loads(Path(args.scene_plan_file).read_text())
+        results = generate_all_clips_v2(
+            scene_plan=scene_plan, photo_dir=args.photo_dir,
+            output_dir=args.output_dir, aspect_ratio=args.aspect_ratio,
+        )
+        print(json.dumps(results, indent=2))
+
+    else:
+        parser.print_help()
+        sys.exit(1)

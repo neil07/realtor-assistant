@@ -18,35 +18,58 @@ def create_ken_burns_clip(
     duration: float = 3.0,
     motion: str = "slow_push",
     resolution: tuple = (1080, 1920),  # 9:16 vertical
+    focal_point: dict = None,
 ) -> dict:
     """
     Create a Ken Burns effect clip from a single photo.
-    
+
     Motions:
-        slow_push: Zoom in slowly toward center
+        slow_push: Zoom in slowly toward center (or focal_point if given)
         pull_back: Start zoomed, pull back
         slide_left: Pan from right to left
         slide_right: Pan from left to right
         static: No motion, just display
+
+    Args:
+        focal_point: Optional {"x": 0.0-1.0, "y": 0.0-1.0} from composition
+                     analysis. When provided, zoom targets this point instead
+                     of the image center.
     """
     w, h = resolution
     fps = 30
     total_frames = int(duration * fps)
-    
-    # Ken Burns zoom parameters
+
+    # Focal point: default to center
+    fx = focal_point.get("x", 0.5) if focal_point else 0.5
+    fy = focal_point.get("y", 0.5) if focal_point else 0.5
+
+    # Ken Burns zoom parameters — focal-point-aware for push/pull
+    focal_x = f"iw*{fx}-(iw/zoom/2)"
+    focal_y = f"ih*{fy}-(ih/zoom/2)"
+    center_x = "iw/2-(iw/zoom/2)"
+    center_y = "ih/2-(ih/zoom/2)"
+
     zoom_configs = {
-        "slow_push": {"start": 1.0, "end": 1.15, "x": "iw/2-(iw/zoom/2)", "y": "ih/2-(ih/zoom/2)"},
-        "pull_back": {"start": 1.15, "end": 1.0, "x": "iw/2-(iw/zoom/2)", "y": "ih/2-(ih/zoom/2)"},
+        "slow_push": {
+            "start": 1.0, "end": 1.15,
+            "x": f"({center_x})+({focal_x}-({center_x}))*on/{total_frames}",
+            "y": f"({center_y})+({focal_y}-({center_y}))*on/{total_frames}",
+        },
+        "pull_back": {
+            "start": 1.15, "end": 1.0,
+            "x": f"({focal_x})+({center_x}-({focal_x}))*on/{total_frames}",
+            "y": f"({focal_y})+({center_y}-({focal_y}))*on/{total_frames}",
+        },
         "slide_left": {"start": 1.1, "end": 1.1, "x": f"(iw/zoom/2) + ((iw - iw/zoom) * (1 - on/{total_frames}))", "y": "ih/2-(ih/zoom/2)"},
         "slide_right": {"start": 1.1, "end": 1.1, "x": f"(iw - iw/zoom) * on/{total_frames}", "y": "ih/2-(ih/zoom/2)"},
         "static": {"start": 1.05, "end": 1.05, "x": "iw/2-(iw/zoom/2)", "y": "ih/2-(ih/zoom/2)"},
     }
-    
+
     config = zoom_configs.get(motion, zoom_configs["slow_push"])
-    
+
     # Build zoompan filter
     zoom_expr = f"{config['start']}+({config['end']}-{config['start']})*on/{total_frames}"
-    
+
     filter_complex = (
         f"scale={w*2}:{h*2},"  # Scale up for quality
         f"zoompan=z='{zoom_expr}'"
@@ -238,14 +261,50 @@ def enhance_photo(
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: render_slideshow.py <image_path> <output_path> [duration] [motion]")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Render slideshow clips and CTA frames")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Ken Burns clip
+    kb = subparsers.add_parser("ken-burns", help="Create Ken Burns effect clip")
+    kb.add_argument("image", help="Input image path")
+    kb.add_argument("output", help="Output video path")
+    kb.add_argument("--duration", type=float, default=3.0, help="Duration in seconds")
+    kb.add_argument("--motion", default="slow_push", help="Motion type")
+    kb.add_argument("--resolution", default="1080x1920", help="Resolution WxH")
+
+    # CTA end frame
+    cta = subparsers.add_parser("cta", help="Create CTA end frame")
+    cta.add_argument("--output", required=True, help="Output video path")
+    cta.add_argument("--agent-name", required=True, help="Agent name")
+    cta.add_argument("--agent-phone", required=True, help="Agent phone number")
+    cta.add_argument("--brokerage", default="", help="Brokerage name")
+    cta.add_argument("--template-file", default=None, help="Template JSON for styling")
+    cta.add_argument("--duration", type=float, default=4.0, help="Duration in seconds")
+    cta.add_argument("--tagline", default="Let's go see it.", help="CTA tagline")
+
+    args = parser.parse_args()
+
+    if args.command == "ken-burns":
+        w, h = map(int, args.resolution.split("x"))
+        result = create_ken_burns_clip(
+            image_path=args.image, output_path=args.output,
+            duration=args.duration, motion=args.motion, resolution=(w, h),
+        )
+        print(json.dumps(result, indent=2))
+
+    elif args.command == "cta":
+        result = create_cta_frame(
+            output_path=args.output,
+            agent_name=args.agent_name,
+            agent_phone=args.agent_phone,
+            brokerage=args.brokerage,
+            duration=args.duration,
+            tagline=args.tagline,
+        )
+        print(json.dumps(result, indent=2))
+
+    else:
+        parser.print_help()
         sys.exit(1)
-    
-    result = create_ken_burns_clip(
-        image_path=sys.argv[1],
-        output_path=sys.argv[2],
-        duration=float(sys.argv[3]) if len(sys.argv) > 3 else 3.0,
-        motion=sys.argv[4] if len(sys.argv) > 4 else "slow_push",
-    )
-    print(json.dumps(result, indent=2))

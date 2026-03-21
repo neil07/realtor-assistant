@@ -140,3 +140,90 @@ def should_offer_voice_clone(phone: str) -> bool:
 def mark_voice_clone_offered(phone: str):
     """Mark that we've offered voice cloning to this agent."""
     update_profile(phone, {"voice_clone_offered": True})
+
+
+def normalize_profile(profile: dict) -> dict:
+    """
+    Upgrade old-format profiles to current schema.
+
+    Old format stored style/music/show_price at the top level;
+    current schema nests them under "preferences" and "stats".
+    """
+    if "preferences" not in profile:
+        profile["preferences"] = {
+            "style": profile.pop("style", "professional"),
+            "music": profile.pop("music_preference", profile.pop("music", "modern")),
+            "format": profile.pop("format_pref", "both"),
+            "show_price": profile.pop("show_price", True),
+            "language": profile.pop("language", "en"),
+        }
+
+    if "stats" not in profile:
+        profile["stats"] = {
+            "videos_created": profile.pop("videos_created", 0),
+            "first_use": profile.get("created_at", datetime.now().isoformat()),
+            "last_use": datetime.now().isoformat(),
+        }
+
+    # Ensure voice_clone_id exists (old profiles may use "voice_clone")
+    if "voice_clone_id" not in profile:
+        profile["voice_clone_id"] = profile.pop("voice_clone", None)
+
+    profile.setdefault("voice_clone_offered", False)
+    profile.setdefault("logo_path", None)
+    profile.setdefault("brokerage", "")
+    profile.setdefault("city", "")
+    profile.setdefault("market_knowledge", {})
+
+    return profile
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description="Manage agent profiles")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Get profile
+    get_cmd = subparsers.add_parser("get", help="Get agent profile")
+    get_cmd.add_argument("--phone", required=True, help="Agent phone number")
+
+    # Create profile
+    create_cmd = subparsers.add_parser("create", help="Create new agent profile")
+    create_cmd.add_argument("--phone", required=True, help="Agent phone number")
+    create_cmd.add_argument("--name", required=True, help="Agent name")
+    create_cmd.add_argument("--brokerage", default="", help="Brokerage name")
+    create_cmd.add_argument("--city", default="", help="City")
+    create_cmd.add_argument("--style", default="professional", help="Preferred style")
+    create_cmd.add_argument("--music", default="modern", help="Music preference")
+
+    # Update profile
+    update_cmd = subparsers.add_parser("update", help="Update agent profile fields")
+    update_cmd.add_argument("--phone", required=True, help="Agent phone number")
+    update_cmd.add_argument("--updates-json", required=True, help="JSON string of updates")
+
+    args = parser.parse_args()
+
+    if args.command == "get":
+        profile = get_profile(args.phone)
+        if profile:
+            profile = normalize_profile(profile)
+        print(json.dumps(profile, indent=2))
+
+    elif args.command == "create":
+        profile = create_profile(
+            phone=args.phone, name=args.name,
+            brokerage=args.brokerage, city=args.city,
+            style=args.style, music=args.music,
+        )
+        print(json.dumps(profile, indent=2))
+
+    elif args.command == "update":
+        updates = json.loads(args.updates_json)
+        profile = update_profile(args.phone, updates)
+        print(json.dumps(profile, indent=2))
+
+    else:
+        parser.print_help()
+        sys.exit(1)

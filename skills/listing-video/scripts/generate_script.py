@@ -23,13 +23,35 @@ def build_script_request(
     market_context: str = "",
     city: str = "",
     years: str = "10",
+    creative_context: dict = None,
 ) -> dict:
     """
     Build a Claude API request for voiceover script generation.
-    
+
+    Args:
+        creative_context: Optional creative director guidance dict.
+
     Returns:
         API request dict
     """
+    # Build creative direction block if provided
+    creative_direction = ""
+    if creative_context:
+        parts = []
+        if creative_context.get("narrative_strategy"):
+            parts.append(f"Narrative strategy: {creative_context['narrative_strategy']}")
+        if creative_context.get("voiceover_tone"):
+            parts.append(f"Voiceover tone: {creative_context['voiceover_tone']}")
+        if creative_context.get("emotional_arc"):
+            arc = creative_context["emotional_arc"]
+            parts.append(f"Emotional arc: hook={arc.get('hook','')}, journey={arc.get('journey','')}, close={arc.get('close','')}")
+        if creative_context.get("concept_name"):
+            parts.append(f"Creative concept: {creative_context['concept_name']}")
+        if creative_context.get("property_archetype"):
+            parts.append(f"Property archetype: {creative_context['property_archetype']}")
+        if parts:
+            creative_direction = "\n## Creative Direction\n\n" + "\n".join(f"- {p}" for p in parts) + "\n"
+
     prompt = SCRIPT_PROMPT.format(
         city=city or extract_city(address),
         years=years,
@@ -42,6 +64,7 @@ def build_script_request(
         agent_phone=agent_phone,
         agent_notes=agent_notes,
         market_context=market_context,
+        creative_direction=creative_direction,
     )
 
     return {
@@ -157,12 +180,101 @@ def validate_script(parsed: dict) -> list[str]:
     return issues
 
 
+def generate_script_live(
+    photo_analysis: dict,
+    address: str,
+    price: str,
+    bed_bath: str = "",
+    sqft: str = "",
+    agent_name: str = "",
+    agent_phone: str = "",
+    agent_notes: str = "",
+    market_context: str = "",
+    city: str = "",
+    creative_context: dict = None,
+    max_attempts: int = 2,
+) -> dict:
+    """
+    Call Claude to generate a voiceover script, with auto-validation and retry.
+
+    Args:
+        creative_context: Optional dict from creative director with keys:
+            "narrative_strategy", "voiceover_tone", "emotional_arc", etc.
+            Injected into the prompt as {creative_direction}.
+        max_attempts: Retry count if validation fails.
+
+    Returns:
+        Parsed script dict from parse_script_response().
+    """
+    from api_client import call_claude
+
+    request = build_script_request(
+        photo_analysis=photo_analysis,
+        address=address,
+        price=price,
+        bed_bath=bed_bath,
+        sqft=sqft,
+        agent_name=agent_name,
+        agent_phone=agent_phone,
+        agent_notes=agent_notes,
+        market_context=market_context,
+        city=city,
+        creative_context=creative_context,
+    )
+
+    best = None
+    best_issues = None
+
+    for attempt in range(max_attempts):
+        text = call_claude(request)
+        parsed = parse_script_response(text)
+        issues = validate_script(parsed)
+
+        if not issues:
+            return parsed
+
+        # Keep the best attempt (fewest issues)
+        if best_issues is None or len(issues) < len(best_issues):
+            best = parsed
+            best_issues = issues
+
+    # Return best attempt even if imperfect
+    return best
+
+
 if __name__ == "__main__":
-    # Test with sample input
-    sample = {
-        "address": "123 Oak St, Frisco, TX",
-        "price": "$625,000",
-        "photo_analysis": {"photos": [], "property_summary": {}},
-    }
-    request = build_script_request(**sample)
-    print(json.dumps(request, indent=2))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate voiceover script")
+    parser.add_argument("--live", action="store_true", help="Call Claude API")
+    parser.add_argument("--analysis-file", required=True, help="Photo analysis JSON file")
+    parser.add_argument("--address", required=True, help="Property address")
+    parser.add_argument("--price", required=True, help="Property price")
+    parser.add_argument("--bed-bath", default="", help="Bed/bath info")
+    parser.add_argument("--sqft", default="", help="Square footage")
+    parser.add_argument("--agent-name", default="", help="Agent name")
+    parser.add_argument("--agent-phone", default="", help="Agent phone")
+    parser.add_argument("--creative-context-file", default=None, help="Creative brief JSON file")
+    args = parser.parse_args()
+
+    analysis = json.loads(Path(args.analysis_file).read_text())
+    creative_context = None
+    if args.creative_context_file:
+        creative_context = json.loads(Path(args.creative_context_file).read_text())
+
+    if args.live:
+        result = generate_script_live(
+            photo_analysis=analysis, address=args.address, price=args.price,
+            bed_bath=args.bed_bath, sqft=args.sqft,
+            agent_name=args.agent_name, agent_phone=args.agent_phone,
+            creative_context=creative_context,
+        )
+    else:
+        result = build_script_request(
+            photo_analysis=analysis, address=args.address, price=args.price,
+            bed_bath=args.bed_bath, sqft=args.sqft,
+            agent_name=args.agent_name, agent_phone=args.agent_phone,
+            creative_context=creative_context,
+        )
+
+    print(json.dumps(result, indent=2, default=str))
