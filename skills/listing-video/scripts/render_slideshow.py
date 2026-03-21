@@ -70,8 +70,13 @@ def create_ken_burns_clip(
     # Build zoompan filter
     zoom_expr = f"{config['start']}+({config['end']}-{config['start']})*on/{total_frames}"
 
+    # Scale: preserve aspect ratio, fill the zoompan canvas (2x output for quality)
+    # force_original_aspect_ratio=increase → ensures both dims >= target
+    # crop → removes excess (centered) so zoompan gets a clean canvas
+    canvas_w, canvas_h = w * 2, h * 2
     filter_complex = (
-        f"scale={w*2}:{h*2},"  # Scale up for quality
+        f"scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=increase,"
+        f"crop={canvas_w}:{canvas_h},"
         f"zoompan=z='{zoom_expr}'"
         f":x='{config['x']}'"
         f":y='{config['y']}'"
@@ -272,7 +277,7 @@ if __name__ == "__main__":
     kb.add_argument("output", help="Output video path")
     kb.add_argument("--duration", type=float, default=3.0, help="Duration in seconds")
     kb.add_argument("--motion", default="slow_push", help="Motion type")
-    kb.add_argument("--resolution", default="1080x1920", help="Resolution WxH")
+    kb.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio (9:16 or 16:9)")
 
     # CTA end frame
     cta = subparsers.add_parser("cta", help="Create CTA end frame")
@@ -283,18 +288,22 @@ if __name__ == "__main__":
     cta.add_argument("--template-file", default=None, help="Template JSON for styling")
     cta.add_argument("--duration", type=float, default=4.0, help="Duration in seconds")
     cta.add_argument("--tagline", default="Let's go see it.", help="CTA tagline")
+    cta.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio (9:16 or 16:9)")
 
     args = parser.parse_args()
 
     if args.command == "ken-burns":
-        w, h = map(int, args.resolution.split("x"))
+        from config import resolution_for_aspect
+        resolution = resolution_for_aspect(args.aspect_ratio)
         result = create_ken_burns_clip(
             image_path=args.image, output_path=args.output,
-            duration=args.duration, motion=args.motion, resolution=(w, h),
+            duration=args.duration, motion=args.motion, resolution=resolution,
         )
         print(json.dumps(result, indent=2))
 
     elif args.command == "cta":
+        from config import resolution_for_aspect
+        resolution = resolution_for_aspect(args.aspect_ratio)
         result = create_cta_frame(
             output_path=args.output,
             agent_name=args.agent_name,
@@ -302,6 +311,7 @@ if __name__ == "__main__":
             brokerage=args.brokerage,
             duration=args.duration,
             tagline=args.tagline,
+            resolution=resolution,
         )
         print(json.dumps(result, indent=2))
 

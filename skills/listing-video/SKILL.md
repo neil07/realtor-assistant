@@ -290,7 +290,8 @@ python3 "$SKILL_DIR/scripts/render_slideshow.py" cta \
   --agent-name "John Smith" \
   --agent-phone "+1234567890" \
   --brokerage "Keller Williams" \
-  --template-file "$SKILL_DIR/templates/professional.json"
+  --template-file "$SKILL_DIR/templates/professional.json" \
+  --aspect-ratio "9:16"
 ```
 
 ### Step 13: 最终组装

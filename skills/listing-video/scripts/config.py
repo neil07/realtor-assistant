@@ -24,3 +24,15 @@ def load_template(style: str) -> dict:
     if not path.exists():
         path = TEMPLATES_DIR / "professional.json"
     return json.loads(path.read_text())
+
+
+# ── Aspect ratio helpers ──────────────────────────────────────────────
+ASPECT_RESOLUTIONS = {
+    "9:16": (1080, 1920),
+    "16:9": (1920, 1080),
+}
+
+
+def resolution_for_aspect(aspect_ratio: str) -> tuple[int, int]:
+    """Convert aspect ratio string to (width, height) tuple."""
+    return ASPECT_RESOLUTIONS.get(aspect_ratio, (1080, 1920))
