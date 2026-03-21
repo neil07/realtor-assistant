@@ -31,7 +31,7 @@ def analyze_photo_composition(image_path: str, room_type: str = "other") -> dict
     ]
 
     request = {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6-20250514",
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": content}],
     }

@@ -55,7 +55,7 @@ def build_scene_plan_request(
     })
 
     return {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6-20250514",
         "max_tokens": 4096,
         "messages": [{"role": "user", "content": content}],
     }

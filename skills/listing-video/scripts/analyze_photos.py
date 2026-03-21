@@ -63,7 +63,7 @@ def analyze_photos(photo_paths: list[str]) -> dict:
     # TODO: Call Claude API via anthropic SDK or subprocess
     # For now, return the message structure for OpenClaw to use
     return {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6-20250514",
         "max_tokens": 4096,
         "messages": [{"role": "user", "content": content}],
     }
