@@ -47,14 +47,19 @@ def concat_clips(
             "-pix_fmt", "yuv420p",
             output_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        except subprocess.TimeoutExpired:
+            os.remove(concat_file)
+            return {"status": "error", "message": "ffmpeg concat timed out (5 min)"}
+
         if result.returncode != 0:
+            os.remove(concat_file)
             return {"status": "error", "message": result.stderr[-500:]}
-    
+
     # Clean up
     os.remove(concat_file)
-    
+
     return {"status": "success", "video_path": output_path}
 
 
@@ -116,7 +121,7 @@ def _concat_with_crossfade(
         output_path,
     ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-500:]}
@@ -219,11 +224,14 @@ def add_audio_layers(
             output_path,
         ]
     
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "ffmpeg crossfade timed out (5 min)"}
+
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-500:]}
-    
+
     return {"status": "success", "video_path": output_path}
 
 
@@ -290,13 +298,19 @@ def create_output_format(
         "-show_entries", "stream=width,height",
         "-of", "json", video_path,
     ]
-    probe = subprocess.run(probe_cmd, capture_output=True, text=True)
+    try:
+        probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        probe = None
     src_w, src_h = 1080, 1920  # default assumption
-    if probe.returncode == 0:
-        streams = json.loads(probe.stdout).get("streams", [{}])
-        if streams:
-            src_w = streams[0].get("width", 1080)
-            src_h = streams[0].get("height", 1920)
+    if probe and probe.returncode == 0:
+        try:
+            streams = json.loads(probe.stdout).get("streams", [{}])
+            if streams:
+                src_w = streams[0].get("width", 1080)
+                src_h = streams[0].get("height", 1920)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
 
     src_vertical = src_h > src_w
     target_vertical = aspect_ratio == "9:16"
@@ -317,7 +331,7 @@ def create_output_format(
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "copy", output_path,
         ]
-        subprocess.run(cmd, capture_output=True, text=True)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     else:
         # 9:16 source → 16:9 target: blurred background fill
         cmd = [
@@ -331,7 +345,7 @@ def create_output_format(
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "copy", output_path,
         ]
-        subprocess.run(cmd, capture_output=True, text=True)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
     return {
         "status": "success",
@@ -364,10 +378,16 @@ def get_duration(file_path: str) -> float:
         "-of", "json",
         file_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        return 0.0
     if result.returncode == 0:
-        data = json.loads(result.stdout)
-        return float(data.get("format", {}).get("duration", 0))
+        try:
+            data = json.loads(result.stdout)
+            return float(data.get("format", {}).get("duration", 0))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return 0.0
     return 0.0
 
 
@@ -436,7 +456,7 @@ def _ensure_video_covers_audio(
             stretched_path,
         ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
     if result.returncode != 0:
         # Fallback: return original and let audio be truncated
@@ -669,7 +689,7 @@ def full_assembly_v2(
                         stretched_path,
                     ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode == 0:
                     clip_path = stretched_path
             elif clip_dur > narr_dur + 2.0:
@@ -686,7 +706,7 @@ def full_assembly_v2(
                     "-crf", "18", "-pix_fmt", "yuv420p",
                     "-an", trimmed_path,
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode == 0:
                     clip_path = trimmed_path
 
@@ -700,7 +720,7 @@ def full_assembly_v2(
                 "-shortest",
                 merged_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode == 0:
                 merged_dur = get_duration(merged_path)
@@ -901,12 +921,15 @@ def add_audio_layers_v2(
     )
 
     # Check if video already has audio (baked-in narration from V2 assembly)
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-select_streams", "a", "-show_entries",
-         "stream=codec_type", "-of", "json", video_path],
-        capture_output=True, text=True,
-    )
-    has_audio = "audio" in probe.stdout if probe.returncode == 0 else False
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a", "-show_entries",
+             "stream=codec_type", "-of", "json", video_path],
+            capture_output=True, text=True, timeout=15,
+        )
+        has_audio = "audio" in probe.stdout if probe.returncode == 0 else False
+    except subprocess.TimeoutExpired:
+        has_audio = False
 
     if has_audio:
         filter_complex += "[0:a][music]amix=inputs=2:duration=first[outa]"
@@ -922,7 +945,7 @@ def add_audio_layers_v2(
         "-shortest", output_path,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-500:]}
 
@@ -1004,7 +1027,7 @@ def full_assembly_v3(
                            "-i", clip_path, "-t", f"{narr_dur + 0.3:.2f}",
                            "-an", "-c:v", "libx264", "-preset", "fast",
                            "-crf", "18", "-pix_fmt", "yuv420p", stretched]
-                r = subprocess.run(cmd, capture_output=True, text=True)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if r.returncode == 0:
                     working_clip = stretched
             elif clip_dur > narr_dur + 2.0:
@@ -1013,7 +1036,7 @@ def full_assembly_v3(
                        "-t", f"{narr_dur + 1.0:.2f}",
                        "-c:v", "libx264", "-preset", "fast",
                        "-crf", "18", "-pix_fmt", "yuv420p", "-an", trimmed]
-                r = subprocess.run(cmd, capture_output=True, text=True)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if r.returncode == 0:
                     working_clip = trimmed
 
@@ -1022,7 +1045,7 @@ def full_assembly_v3(
                    "-map", "0:v", "-map", "1:a",
                    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                    "-shortest", merged_path]
-            r = subprocess.run(cmd, capture_output=True, text=True)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if r.returncode == 0:
                 merged_dur = get_duration(merged_path)

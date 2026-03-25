@@ -261,7 +261,11 @@ def generate_background_music(
     # Try Suno first
     result = generate_music_suno(prompt, duration, bpm_target=sum(bpm_range) // 2)
     if result.get("status") == "success" and result.get("audio_url"):
-        audio_resp = requests.get(result["audio_url"], timeout=60)
+        try:
+            audio_resp = requests.get(result["audio_url"], timeout=60)
+            audio_resp.raise_for_status()
+        except requests.RequestException as e:
+            return {"status": "error", "message": f"Failed to download Suno audio: {e}"}
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(audio_resp.content)
         beats = detect_beats(output_path)
@@ -270,7 +274,11 @@ def generate_background_music(
     # Try MusicGen
     result = generate_music_musicgen(prompt, duration)
     if result.get("status") == "success" and result.get("audio_url"):
-        audio_resp = requests.get(result["audio_url"], timeout=60)
+        try:
+            audio_resp = requests.get(result["audio_url"], timeout=60)
+            audio_resp.raise_for_status()
+        except requests.RequestException as e:
+            return {"status": "error", "message": f"Failed to download MusicGen audio: {e}"}
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(audio_resp.content)
         beats = detect_beats(output_path)

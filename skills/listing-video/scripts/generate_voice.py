@@ -5,8 +5,10 @@ Generates voiceover audio from script using ElevenLabs or OpenAI TTS.
 Supports voice cloning for personalized agent voices.
 """
 
+import asyncio
 import json
 import os
+import subprocess
 import sys
 import requests
 from pathlib import Path
@@ -97,6 +99,7 @@ def generate_elevenlabs(
         f"{ELEVENLABS_API}/text-to-speech/{voice_id}",
         headers=headers,
         json=payload,
+        timeout=60,
     )
     
     if resp.status_code != 200:
@@ -152,6 +155,7 @@ def generate_openai_tts(
         "https://api.openai.com/v1/audio/speech",
         headers=headers,
         json=payload,
+        timeout=60,
     )
     
     if resp.status_code != 200:
@@ -204,6 +208,7 @@ def clone_voice(
             headers=headers,
             data=data,
             files=files,
+            timeout=60,
         )
     
     if resp.status_code != 200:
@@ -310,17 +315,19 @@ def generate_scene_voiceovers(
 
         if result["status"] == "success":
             # Get actual audio duration
-            import subprocess
-            dur_cmd = [
-                "ffprobe", "-v", "quiet",
-                "-show_entries", "format=duration",
-                "-of", "json", audio_path,
-            ]
-            dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
             duration = 0.0
-            if dur_result.returncode == 0:
-                dur_data = json.loads(dur_result.stdout)
-                duration = float(dur_data.get("format", {}).get("duration", 0))
+            try:
+                dur_cmd = [
+                    "ffprobe", "-v", "quiet",
+                    "-show_entries", "format=duration",
+                    "-of", "json", audio_path,
+                ]
+                dur_result = subprocess.run(dur_cmd, capture_output=True, text=True, timeout=15)
+                if dur_result.returncode == 0:
+                    dur_data = json.loads(dur_result.stdout)
+                    duration = float(dur_data.get("format", {}).get("duration", 0))
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, TypeError):
+                pass
 
             results.append({
                 "sequence": seq,
@@ -347,6 +354,110 @@ def generate_scene_voiceovers(
         "total_duration": sum(r["duration"] for r in results),
     })
 
+    return results
+
+
+TTS_MAX_CONCURRENCY = 3
+
+
+def _get_audio_duration(audio_path: str) -> float:
+    """Get audio duration via ffprobe. Returns 0.0 on failure."""
+    try:
+        dur_cmd = [
+            "ffprobe", "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "json", audio_path,
+        ]
+        dur_result = subprocess.run(dur_cmd, capture_output=True, text=True, timeout=15)
+        if dur_result.returncode == 0:
+            dur_data = json.loads(dur_result.stdout)
+            return float(dur_data.get("format", {}).get("duration", 0))
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return 0.0
+
+
+async def _tts_one_scene(
+    sem: asyncio.Semaphore,
+    seq: int,
+    text: str,
+    audio_path: str,
+    voice_id: str,
+    style: str,
+) -> dict:
+    """Generate TTS for a single scene, respecting concurrency limit."""
+    async with sem:
+        # Run blocking TTS + ffprobe in thread pool
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: generate_voiceover(text, audio_path, voice_id, style)
+        )
+        if result["status"] == "success":
+            duration = await loop.run_in_executor(None, _get_audio_duration, audio_path)
+            return {
+                "sequence": seq, "audio_path": audio_path,
+                "duration": duration, "text": text, "status": "success",
+            }
+        return {
+            "sequence": seq, "audio_path": None,
+            "duration": 0, "text": text, "status": "error",
+            "message": result.get("message", ""),
+        }
+
+
+async def _generate_scene_voiceovers_async(
+    scenes: list[dict],
+    output_dir: str,
+    voice_id: str = None,
+    style: str = "professional",
+) -> list[dict]:
+    """Concurrently generate per-scene TTS with semaphore throttle."""
+    os.makedirs(output_dir, exist_ok=True)
+    narrated = [s for s in scenes if s.get("text_narration", "").strip()]
+    sem = asyncio.Semaphore(TTS_MAX_CONCURRENCY)
+
+    tasks = []
+    for scene in narrated:
+        seq = scene["sequence"]
+        text = scene["text_narration"].strip()
+        audio_path = os.path.join(output_dir, f"narration_{seq:02d}.mp3")
+        tasks.append(_tts_one_scene(sem, seq, text, audio_path, voice_id, style))
+
+    results = await asyncio.gather(*tasks)
+    return sorted(results, key=lambda r: r["sequence"])
+
+
+def generate_scene_voiceovers_concurrent(
+    scenes: list[dict],
+    output_dir: str,
+    voice_id: str = None,
+    style: str = "professional",
+) -> list[dict]:
+    """
+    Generate per-scene TTS concurrently (up to TTS_MAX_CONCURRENCY in parallel).
+
+    Drop-in replacement for generate_scene_voiceovers with ~3x speedup.
+    """
+    from job_logger import get_logger, log_step_start, log_step_end
+
+    logger = get_logger()
+    narrated = [s for s in scenes if s.get("text_narration", "").strip()]
+    log_step_start("per_scene_tts_concurrent", {
+        "total_scenes": len(narrated),
+        "voice_id": voice_id or "default",
+        "style": style,
+        "max_concurrency": TTS_MAX_CONCURRENCY,
+    })
+
+    results = asyncio.run(
+        _generate_scene_voiceovers_async(scenes, output_dir, voice_id, style)
+    )
+
+    log_step_end("per_scene_tts_concurrent", {
+        "status": "success",
+        "succeeded": sum(1 for r in results if r["status"] == "success"),
+        "total_duration": sum(r["duration"] for r in results),
+    })
     return results
 
 
@@ -466,18 +577,19 @@ def generate_scene_voiceovers_v2(
             )
 
         if result["status"] == "success":
-            import subprocess
-            dur_cmd = [
-                "ffprobe", "-v", "quiet",
-                "-show_entries", "format=duration",
-                "-of", "json", audio_path,
-            ]
-            dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
             duration = 0.0
-            if dur_result.returncode == 0:
-                import json as _json
-                dur_data = _json.loads(dur_result.stdout)
-                duration = float(dur_data.get("format", {}).get("duration", 0))
+            try:
+                dur_cmd = [
+                    "ffprobe", "-v", "quiet",
+                    "-show_entries", "format=duration",
+                    "-of", "json", audio_path,
+                ]
+                dur_result = subprocess.run(dur_cmd, capture_output=True, text=True, timeout=15)
+                if dur_result.returncode == 0:
+                    dur_data = json.loads(dur_result.stdout)
+                    duration = float(dur_data.get("format", {}).get("duration", 0))
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, TypeError):
+                pass
 
             results.append({
                 "sequence": seq,

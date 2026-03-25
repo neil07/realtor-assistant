@@ -229,12 +229,15 @@ def generate_seedance_clip(
         "watermark": False,
     }
 
-    resp = requests.post(
-        f"{ARK_API_BASE}/contents/generations/tasks",
-        headers=headers,
-        json=payload,
-        timeout=30,
-    )
+    try:
+        resp = requests.post(
+            f"{ARK_API_BASE}/contents/generations/tasks",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        return {"status": "error", "message": f"Seedance API request failed: {e}"}
     if resp.status_code not in (200, 201):
         return {"status": "error", "message": f"Seedance API error {resp.status_code}: {resp.text}"}
 
@@ -245,11 +248,14 @@ def generate_seedance_clip(
     # Step 2: Poll for completion (max ~5 min)
     for _ in range(60):
         time.sleep(5)
-        poll = requests.get(
-            f"{ARK_API_BASE}/contents/generations/tasks/{task_id}",
-            headers=headers,
-            timeout=15,
-        )
+        try:
+            poll = requests.get(
+                f"{ARK_API_BASE}/contents/generations/tasks/{task_id}",
+                headers=headers,
+                timeout=15,
+            )
+        except requests.RequestException:
+            continue
         if poll.status_code != 200:
             continue
 
@@ -259,7 +265,11 @@ def generate_seedance_clip(
         if status == "succeeded":
             video_url = (data.get("output") or {}).get("video_url")
             if video_url:
-                video_resp = requests.get(video_url, timeout=60)
+                try:
+                    video_resp = requests.get(video_url, timeout=60)
+                    video_resp.raise_for_status()
+                except requests.RequestException as e:
+                    return {"status": "error", "message": f"Failed to download Seedance video: {e}"}
                 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
                 Path(output_path).write_bytes(video_resp.content)
                 return {
@@ -330,7 +340,10 @@ def generate_runway_clip(
         "ratio": runway_ratio,
     }
 
-    resp = requests.post(f"{RUNWAY_API_BASE}/image_to_video", headers=headers, json=payload)
+    try:
+        resp = requests.post(f"{RUNWAY_API_BASE}/image_to_video", headers=headers, json=payload, timeout=30)
+    except requests.RequestException as e:
+        return {"status": "error", "message": f"Runway API request failed: {e}"}
     if resp.status_code != 200:
         return {"status": "error", "message": f"Runway API error {resp.status_code}: {resp.text}"}
 
@@ -342,7 +355,10 @@ def generate_runway_clip(
 
     for _ in range(60):
         time.sleep(5)
-        poll = requests.get(f"{RUNWAY_API_BASE}/tasks/{task_id}", headers=headers)
+        try:
+            poll = requests.get(f"{RUNWAY_API_BASE}/tasks/{task_id}", headers=headers, timeout=15)
+        except requests.RequestException:
+            continue
         if poll.status_code != 200:
             continue
 
@@ -352,7 +368,11 @@ def generate_runway_clip(
         if status == "SUCCEEDED":
             video_url = data.get("output", [None])[0]
             if video_url:
-                video_resp = requests.get(video_url)
+                try:
+                    video_resp = requests.get(video_url, timeout=60)
+                    video_resp.raise_for_status()
+                except requests.RequestException as e:
+                    return {"status": "error", "message": f"Failed to download Runway video: {e}"}
                 Path(output_path).write_bytes(video_resp.content)
                 return {
                     "status": "success",

@@ -62,14 +62,20 @@ def analyze_enhancement_needs(
     }
 
     # Check resolution — upscale if under 2160px wide
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "stream=width,height", "-of", "json", photo_path],
-        capture_output=True, text=True,
-    )
-    if probe.returncode == 0:
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "stream=width,height", "-of", "json", photo_path],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        probe = None
+    if probe and probe.returncode == 0:
         import json
-        streams = json.loads(probe.stdout).get("streams", [{}])
-        width = streams[0].get("width", 0) if streams else 0
+        try:
+            streams = json.loads(probe.stdout).get("streams", [{}])
+            width = streams[0].get("width", 0) if streams else 0
+        except (json.JSONDecodeError, ValueError, TypeError):
+            width = 0
         if width < 2160:
             needs["upscale"] = True
 
@@ -104,7 +110,10 @@ def upscale_photo(image_path: str, output_path: str, target_min_width: int = 216
         "-vf", f"scale={target_min_width}:-1:flags=lanczos",
         "-q:v", "2", output_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "ffmpeg upscale timed out"}
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-300:]}
     return {"status": "success", "image_path": output_path, "method": "ffmpeg_lanczos"}
@@ -144,7 +153,10 @@ def enhance_hdr(image_path: str, output_path: str, strength: str = "medium") -> 
 
     vf = f"unsharp={s['unsharp']},curves={s['curves']}"
     cmd = ["ffmpeg", "-y", "-i", image_path, "-vf", vf, "-q:v", "2", output_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "ffmpeg HDR enhancement timed out"}
 
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-300:]}
@@ -179,7 +191,10 @@ def apply_color_grade(
 
     vf = ",".join(filters)
     cmd = ["ffmpeg", "-y", "-i", image_path, "-vf", vf, "-q:v", "2", output_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "ffmpeg color grading timed out"}
 
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-300:]}
@@ -222,8 +237,9 @@ def replace_sky(image_path: str, output_path: str, target_sky: str = "golden_hou
         if resp.status_code == 200:
             Path(output_path).write_bytes(resp.content)
             return {"status": "success", "image_path": output_path, "sky": target_sky}
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Sky replacement failed: %s", e)
 
     # Fallback: no change
     subprocess.run(["cp", image_path, output_path], check=True)
