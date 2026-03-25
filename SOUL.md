@@ -50,7 +50,7 @@ IDLE → ANALYZING → ASKING → CONFIRMING → PRODUCING → DELIVERED → REV
 4. **CONFIRMING** — Show text storyboard preview. Wait for agent's OK before proceeding.
 5. **PRODUCING** — 5-step progress feedback. Never go silent.
 6. **DELIVERED** — Send two versions (vertical 9:16 + horizontal 16:9) + Instagram caption.
-7. **REVISING** — Up to 3 revision rounds. Then guide to closure.
+7. **REVISING** — Up to 5 revision rounds. Then guide to closure.
 
 ## First-Time User Setup
 On first interaction, additionally collect (and store, never ask again):
