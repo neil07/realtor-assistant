@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
 Listing Video Agent — AI Video Generation
-Primary: ByteDance Seedance 1.0 Pro via Volcano Ark API (image-to-video).
-Fallback: Runway Gen-4 Turbo.
+Primary: IMA Studio (auto model selection via ima_video_create.py).
+Fallback 1: ByteDance Seedance 1.0 Pro via Volcano Ark API.
+Fallback 2: Runway Gen-4 Turbo.
 """
 
 import base64
 import json
 import os
+import subprocess
 import sys
 import time
 import requests
@@ -15,6 +17,138 @@ from pathlib import Path
 
 ARK_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
+
+# IMA Studio skill script path
+IMA_SCRIPT_PATH = os.path.expanduser(
+    "~/.openclaw/workspace/skills/ima-video-ai/scripts/ima_video_create.py"
+)
+
+
+def _find_python_for_ima() -> str:
+    """Find a Python 3.10+ interpreter for IMA script (requires str|None syntax)."""
+    import shutil
+    for candidate in ("python3.13", "python3.12", "python3.11", "python3.10"):
+        path = shutil.which(candidate)
+        if path:
+            return path
+    # Fallback to python3 — may fail if < 3.10
+    return shutil.which("python3") or sys.executable
+
+
+# ---------------------------------------------------------------------------
+# Primary: IMA Studio (subprocess call to ima_video_create.py)
+# ---------------------------------------------------------------------------
+
+def generate_ima_clip(
+    image_path: str,
+    motion_prompt: str,
+    duration: int = 5,
+    output_path: str = None,
+    last_frame_path: str = None,
+    aspect_ratio: str = "9:16",
+) -> dict:
+    """
+    Generate a video clip via IMA Studio skill (auto model selection).
+
+    Delegates to ima_video_create.py via subprocess, which handles image
+    upload, model routing, task creation, and polling internally.
+
+    Args:
+        image_path: Path to first frame image
+        motion_prompt: Vivid description of camera motion & scene atmosphere
+        duration: Clip duration in seconds
+        output_path: Where to save the output video
+        last_frame_path: Optional path to last frame image (for scene transitions)
+        aspect_ratio: "9:16" for vertical, "16:9" for horizontal
+
+    Returns:
+        {"status": "success", "video_path": str, "engine": "ima", "model": str, ...}
+    """
+    api_key = os.environ.get("IMA_API_KEY")
+    if not api_key:
+        return {"status": "error", "message": "IMA_API_KEY not set"}
+
+    if not os.path.exists(IMA_SCRIPT_PATH):
+        return {"status": "error", "message": f"IMA skill script not found: {IMA_SCRIPT_PATH}"}
+
+    if not output_path:
+        output_path = str(Path(image_path).with_suffix(".mp4"))
+
+    # Determine task type
+    if last_frame_path and os.path.exists(last_frame_path):
+        task_type = "first_last_frame_to_video"
+    else:
+        task_type = "image_to_video"
+
+    # Build command — IMA script needs Python 3.10+ (uses str|None syntax)
+    python_bin = _find_python_for_ima()
+    cmd = [
+        python_bin, IMA_SCRIPT_PATH,
+        "--api-key", api_key,
+        "--task-type", task_type,
+        "--prompt", motion_prompt,
+        "--input-images", image_path,
+        "--extra-params", json.dumps({
+            "duration": max(5, min(duration, 10)),
+            "aspect_ratio": aspect_ratio,
+        }),
+        "--output-json",
+    ]
+
+    # Add last frame for first_last_frame_to_video
+    if task_type == "first_last_frame_to_video":
+        cmd.extend(["--input-images", last_frame_path])
+
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "IMA video generation timed out (10 min)"}
+
+    if proc.returncode != 0:
+        stderr = proc.stderr[-500:] if proc.stderr else "no stderr"
+        return {"status": "error", "message": f"IMA script failed (exit {proc.returncode}): {stderr}"}
+
+    # Parse --output-json result from stdout.
+    # The JSON block is multi-line (indent=2) preceded by log lines.
+    # Find the last complete JSON object by scanning for lines starting with "{".
+    try:
+        stdout = proc.stdout.strip()
+        ima_result = None
+        for i in range(len(stdout) - 1, -1, -1):
+            if stdout[i] == "{" and (i == 0 or stdout[i - 1] in ("\n", "\r")):
+                try:
+                    ima_result = json.loads(stdout[i:])
+                    break
+                except json.JSONDecodeError:
+                    continue
+        if ima_result is None:
+            return {"status": "error", "message": f"No JSON in IMA output: {stdout[-300:]}"}
+    except Exception as e:
+        return {"status": "error", "message": f"Failed to parse IMA output: {e}"}
+
+    video_url = ima_result.get("url")
+    if not video_url:
+        return {"status": "error", "message": f"No video URL in IMA result: {ima_result}"}
+
+    # Download video to output_path
+    try:
+        video_resp = requests.get(video_url, timeout=120)
+        video_resp.raise_for_status()
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(video_resp.content)
+    except requests.RequestException as e:
+        return {"status": "error", "message": f"Failed to download IMA video: {e}"}
+
+    return {
+        "status": "success",
+        "video_path": output_path,
+        "engine": "ima",
+        "model": ima_result.get("model_name", ima_result.get("model_id", "auto")),
+        "task_id": ima_result.get("task_id"),
+        "credit": ima_result.get("credit"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +312,22 @@ def generate_runway_clip(
     media_type = mime.get(ext, "image/jpeg")
     image_uri = f"data:{media_type};base64,{image_b64}"
 
+    # Map common aspect ratios to Runway's expected format
+    runway_ratio_map = {
+        "9:16": "720:1280",
+        "16:9": "1280:720",
+        "4:3": "1104:832",
+        "3:4": "832:1104",
+        "1:1": "960:960",
+    }
+    runway_ratio = runway_ratio_map.get(aspect_ratio, aspect_ratio)
+
     payload = {
         "model": model,
         "promptImage": image_uri,
         "promptText": motion_prompt,
         "duration": duration,
-        "ratio": aspect_ratio,
+        "ratio": runway_ratio,
     }
 
     resp = requests.post(f"{RUNWAY_API_BASE}/image_to_video", headers=headers, json=payload)
@@ -398,8 +542,8 @@ def generate_all_clips(
             i, total, clip.get("room_type", "?"), duration, motion_prompt,
         )
 
-        # Primary: Seedance
-        result = generate_seedance_clip(
+        # Primary: IMA Studio
+        result = generate_ima_clip(
             image_path=photo_path,
             motion_prompt=motion_prompt,
             duration=duration,
@@ -407,11 +551,24 @@ def generate_all_clips(
             aspect_ratio=aspect_ratio,
         )
 
-        # Fallback: Runway
+        # Fallback 1: Seedance
+        if result["status"] == "error":
+            logger.warning("IMA failed for clip %d: %s", i, result["message"])
+            if progress_callback:
+                progress_callback(f"IMA failed, trying Seedance fallback...")
+            result = generate_seedance_clip(
+                image_path=photo_path,
+                motion_prompt=motion_prompt,
+                duration=duration,
+                output_path=output_path,
+                aspect_ratio=aspect_ratio,
+            )
+
+        # Fallback 2: Runway
         if result["status"] == "error":
             logger.warning("Seedance failed for clip %d: %s", i, result["message"])
             if progress_callback:
-                progress_callback(f"Seedance failed ({result['message']}), trying Runway fallback...")
+                progress_callback(f"Seedance failed, trying Runway fallback...")
             result = generate_runway_clip(
                 image_path=photo_path,
                 motion_prompt=motion_prompt,
@@ -513,8 +670,8 @@ def generate_all_clips_v2(
             i, total, first_frame, last_frame, estimated_dur, motion_prompt,
         )
 
-        # Primary: Seedance with first+last frame
-        result = generate_seedance_clip(
+        # Primary: IMA Studio (supports first+last frame)
+        result = generate_ima_clip(
             image_path=first_path,
             motion_prompt=motion_prompt,
             duration=estimated_dur,
@@ -523,7 +680,21 @@ def generate_all_clips_v2(
             aspect_ratio=aspect_ratio,
         )
 
-        # Fallback: Runway (single frame only)
+        # Fallback 1: Seedance with first+last frame
+        if result["status"] == "error":
+            logger.warning("IMA failed for scene %d: %s", i, result["message"])
+            if progress_callback:
+                progress_callback(f"IMA failed, trying Seedance fallback...")
+            result = generate_seedance_clip(
+                image_path=first_path,
+                motion_prompt=motion_prompt,
+                duration=estimated_dur,
+                output_path=output_path,
+                last_frame_path=last_path,
+                aspect_ratio=aspect_ratio,
+            )
+
+        # Fallback 2: Runway (single frame only)
         if result["status"] == "error":
             logger.warning("Seedance failed for scene %d: %s", i, result["message"])
             if progress_callback:
@@ -579,11 +750,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == "single":
-        result = generate_seedance_clip(
+        result = generate_ima_clip(
             image_path=args.image, motion_prompt=args.prompt,
             duration=args.duration, output_path=args.output,
             last_frame_path=args.last_frame, aspect_ratio=args.aspect_ratio,
         )
+        if result["status"] == "error":
+            result = generate_seedance_clip(
+                image_path=args.image, motion_prompt=args.prompt,
+                duration=args.duration, output_path=args.output,
+                last_frame_path=args.last_frame, aspect_ratio=args.aspect_ratio,
+            )
         if result["status"] == "error":
             result = generate_runway_clip(
                 image_path=args.image, motion_prompt=args.prompt,

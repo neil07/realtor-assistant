@@ -5,17 +5,12 @@ metadata:
   openclaw:
     emoji: "🎬"
     requires:
-      bins: ["python3", "ffmpeg", "ffprobe"]
-      env: ["ANTHROPIC_API_KEY"]
-    primaryEnv: "ANTHROPIC_API_KEY"
+      bins: ["python3.12", "ffmpeg", "ffprobe"]
+      env: ["IMA_API_KEY"]
+    primaryEnv: "IMA_API_KEY"
     optionalEnv:
-      - SEEDDANCE_API_KEY
-      - RUNWAY_API_KEY
-      - ELEVENLABS_API_KEY
-      - OPENAI_API_KEY
+      - ANTHROPIC_API_KEY
       - STABILITY_API_KEY
-      - SUNO_API_KEY
-      - REPLICATE_API_TOKEN
 ---
 
 # Listing Video Agent — SKILL.md
@@ -233,33 +228,42 @@ python3 "$SKILL_DIR/scripts/transition_designer.py" \
 ```
 输出转场序列：每对相邻场景的 xfade 类型和时长。
 
-### Step 8: AI 视频生成（Seedance/Runway）
+### Step 8: AI 视频生成（IMA Studio）
+
+使用 IMA Studio skill 的 `ima_create.py` 生成 image-to-video。
 
 ```bash
-python3 "$SKILL_DIR/scripts/render_ai_video.py" batch \
-  --scene-plan-file "$OUTPUT_DIR/scene_plan.json" \
-  --photo-dir "$PHOTO_DIR" \
-  --output-dir "$OUTPUT_DIR/clips" \
-  --aspect-ratio "9:16"
-```
-逐场景生成 AI 视频。Seedance 优先，失败自动降级 Runway。**耗时 2-5 分钟**。
+IMA_ALL_DIR="$HOME/.openclaw/workspace/skills/ima-all-ai"
 
-你可以用以下命令检查进度：
+# 并行生成所有场景（每个场景独立调用）
+for each scene in scene_plan:
+  python3.12 "$IMA_ALL_DIR/scripts/ima_create.py" \
+    --api-key "$IMA_API_KEY" \
+    --task-type image_to_video \
+    --model-id wan2.6-i2v \
+    --prompt "<cinematic motion prompt for this scene>" \
+    --input-images "$PHOTO_DIR/<scene_photo>.jpg" \
+    --output-json > "$OUTPUT_DIR/clip${i}_result.json" &
+done
+wait
+```
+
+**默认模型：** Wan 2.6 i2v（40 pts/clip @ 1080P 5s）
+**并行生成** 所有场景以节省时间（总耗时 ~1-2 分钟而非串行 5-10 分钟）。
+**耗时：** 每 clip 约 30-90 秒。
+
+### Step 9: 生成配乐（IMA Studio / Suno）
+
 ```bash
-ls -la "$OUTPUT_DIR/clips/"  # 看已生成的 clip 文件
+python3.12 "$IMA_ALL_DIR/scripts/ima_create.py" \
+  --api-key "$IMA_API_KEY" \
+  --task-type text_to_music \
+  --model-id sonic \
+  --prompt "elegant piano background music, soft and warm, real estate luxury property tour, gentle flowing melody, no vocals, cinematic" \
+  --extra-params '{"make_instrumental":true}' \
+  --output-json > "$OUTPUT_DIR/music_result.json"
 ```
-
-### Step 9: 生成配乐（可选，Suno/MusicGen/stock）
-
-```bash
-python3 "$SKILL_DIR/scripts/generate_music.py" \
-  --property-style Mediterranean \
-  --property-tier luxury \
-  --template-file "$SKILL_DIR/templates/elegant.json" \
-  --duration 35 \
-  --output "$OUTPUT_DIR/bgm.mp3"
-```
-级联：Suno → MusicGen → stock 库。自动检测 BPM 和节拍点。
+默认 Suno sonic（25 pts）。可选 DouBao BGM（30 pts）用于短背景音乐。
 
 ### Step 10: 环境音选择（可选，纯规则）
 
@@ -270,17 +274,17 @@ python3 "$SKILL_DIR/scripts/ambient_sound.py" \
 ```
 为室外/特色场景选择环境音（水声、鸟鸣、海浪等）。
 
-### Step 11: 逐场景旁白 TTS（ElevenLabs/OpenAI）
+### Step 11: 旁白 TTS（IMA Studio / seed-tts）
 
 ```bash
-python3 "$SKILL_DIR/scripts/generate_voice.py" batch \
-  --scene-plan-file "$OUTPUT_DIR/scene_plan.json" \
-  --output-dir "$OUTPUT_DIR/narrations" \
-  --voice-id "ErXwobaYiN019PkySvjV" \
-  --style professional \
-  --emotion-aware
+python3.12 "$IMA_ALL_DIR/scripts/ima_create.py" \
+  --api-key "$IMA_API_KEY" \
+  --task-type text_to_speech \
+  --model-id seed-tts-2.0 \
+  --prompt "<full voiceover script>" \
+  --output-json > "$OUTPUT_DIR/tts_result.json"
 ```
-每个场景独立 TTS，自动选择情感配置（excitement/warmth/confidence/urgency）。
+默认 seed-tts-2.0（2 pts）。生成完整旁白音频。
 
 ### Step 12: CTA 结束帧
 
@@ -310,40 +314,95 @@ python3 "$SKILL_DIR/scripts/assemble_final.py" v3 \
 ```
 V3 组装：环境音混入 → 音画同步 → 智能转场 → 节拍对齐 → 配乐闪避。
 
-### 精简流程（跳过可选步骤）
+### ⚠️ 组装关键规则（从实战中总结）
 
-最小可行管线（只需 3 个 API key：ANTHROPIC + SEEDDANCE/RUNWAY + ELEVENLABS/OPENAI）：
+**1. 旁白驱动视频长度（VO-Driven Duration）**
+- 先生成 TTS 旁白 → 获取旁白时长 → 视频总长度 = 旁白时长
+- **绝对不要**用视频长度裁剪旁白（会导致结尾被截断）
+- 如果视频片段总长 < 旁白时长 → 延长最后一个片段（setpts 放慢）
+
+**2. 最后一个片段弹性延长**
+```bash
+# 计算需要的总视频时长（= 旁白时长 + 1-2s 缓冲）
+# 前 N-1 个 clip 用标准速度（setpts*1.8 for 5s→9s clips）
+# 最后一个 clip 用更慢速度补足差额（setpts*2.5 或更多）
+```
+
+**3. 淡出处理（防止突然结束）**
+```bash
+# 视频淡出：在最后 2 秒加 fade=t=out
+[vout]fade=t=out:st={total_dur-2}:d=2[vfinal]
+
+# 音频淡出：旁白和 BGM 都要淡出
+[vo]afade=t=out:st={total_dur-3}:d=3[vo_out]
+[bgm]afade=t=out:st={total_dur-3}:d=3[bgm_out]
+```
+
+**4. 不要加速旁白**
+- 旁白速度保持原速（atempo=1.0），不要为了适配短视频而加速
+- 如果需要更短的视频 → 缩短旁白文案（减少词数），而不是加速播放
+
+**5. 横屏/竖屏转换**
+```bash
+# 竖屏 9:16 (默认):
+scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920
+
+# 横屏 16:9:
+scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080
+```
+
+**6. BGM 音量比例**
+- BGM volume=0.15（旁白为主，BGM 为辅）
+- 使用 amix 混合，dropout_transition=2 防止断层
+
+**7. 交付后上传 Google Cloud Storage**
+```bash
+gsutil cp final.mp4 gs://reel-agent-videos/<listing_name>.mp4
+# Bucket 已设置 allUsers:objectViewer，上传即公开
+# 公开 URL: https://storage.googleapis.com/reel-agent-videos/<filename>
+```
+
+### 精简流程（实际使用的管线）
+
+最小可行管线（只需 IMA_API_KEY）：
 
 ```
-Step 1 (照片分析) → Step 4 (场景规划) → Step 6 (写 prompt)
-→ Step 8 (AI 视频) → Step 11 (TTS) → Step 12 (CTA) → Step 13 (组装)
+Step 1 (照片分析，Claude Vision) → 写旁白脚本
+→ Step 8 (AI 视频，IMA i2v，并行) + Step 9 (配乐，IMA Suno) + Step 11 (TTS，IMA seed-tts)
+→ 下载所有素材 → ffmpeg 组装（缩放+转场+混音+淡出）
+→ 压缩 → 上传 GCS → 交付链接
 ```
+
+**成本参考（5 张照片 listing）：**
+| 步骤 | 模型 | 积分 |
+|------|------|------|
+| 5x image-to-video | Wan 2.6 i2v 1080P 5s | 5 × 40 = 200 pts |
+| 配乐 | Suno sonic | 25 pts |
+| 旁白 | seed-tts-2.0 | 2 pts |
+| **总计** | | **227 pts** |
 
 可选增强（渐进启用）：
 - Step 2（照片增强）— 需要 STABILITY_API_KEY，否则只用 ffmpeg
 - Step 3（创意总监）— 用 ANTHROPIC_API_KEY，增强创意质量
 - Step 5（运镜规划）— 用 ANTHROPIC_API_KEY，提升运镜精度
 - Step 7（转场设计）— 零成本规则引擎
-- Step 9（AI 配乐）— 需要 SUNO_API_KEY 或 REPLICATE_API_TOKEN
 - Step 10（环境音）— 零成本，需预置音效文件
 
 ---
 
 ## Models per Step
 
-| Step | Model | Fallback | Cost (10 photos) |
-|------|-------|----------|-------------------|
-| Photo analysis | Claude Sonnet (Vision) | — | ~$0.02 |
-| Creative director | Claude Sonnet | — | ~$0.01 |
-| Scene planning | Claude Sonnet (Vision) | — | ~$0.01 |
-| Cinematic motion | Claude Sonnet (Vision) | — | ~$0.05 |
-| Video prompts | Claude Sonnet (Vision) | — | ~$0.02 |
-| Photo enhancement | ffmpeg (local) | Stability AI | $0-$0.16 |
-| Image-to-video | Seedance 1.0 Pro | Runway Gen-4 Turbo | ~$2.50 |
-| Background music | Suno AI | Replicate MusicGen / stock | $0-$0.08 |
-| TTS voiceover | ElevenLabs v3 | OpenAI TTS | ~$0.12 |
+| Step | Model | Provider | Cost |
+|------|-------|----------|------|
+| Photo analysis | Claude Vision (via agent model) | Anthropic | ~$0.02 |
+| Image-to-video | Wan 2.6 i2v (`wan2.6-i2v`) | IMA Studio | 40 pts/clip (1080P 5s) |
+| Background music | Suno sonic (`sonic`) | IMA Studio | 25 pts |
+| TTS voiceover | seed-tts-2.0 | IMA Studio | 2 pts |
 | Assembly | ffmpeg (local) | — | $0 |
-| **Total** | | | **~$2.65-$2.95** |
+| **Total (5 photos)** | | | **227 IMA pts** |
+
+**IMA Studio 脚本路径：** `~/.openclaw/workspace/skills/ima-all-ai/scripts/ima_create.py`
+**Python 版本：** 必须使用 `python3.12`（3.9 不兼容 type union 语法）
 
 ## AI Video Generation Strategy (V2 Pipeline)
 
@@ -362,15 +421,17 @@ Step 1 (照片分析) → Step 4 (场景规划) → Step 6 (写 prompt)
    - 遵守房产约束：不跨房间运镜、同设施不生成两个、比例合理
    - 包含情绪/色调/风格描述，公共空间添加人物活动
 
-3. **首尾帧视频生成** (`render_ai_video.py`)
-   - Seedance 1.0 Pro 接收首帧+尾帧+AI prompt
-   - 生成有明确起止目标的平滑过渡视频
-   - 旁白时长驱动 clip duration，确保音画同步
+3. **AI 视频生成** (IMA Studio `ima_create.py`)
+   - Wan 2.6 i2v 接收照片 + 运镜 prompt
+   - 所有场景并行生成（节省时间）
+   - 每 clip 5s @ 1080P，后期通过 setpts 调整速度匹配旁白
 
-4. **逐场景旁白 + 装配** (`generate_voice.py` + `assemble_final.py`)
-   - 每个场景独立 TTS，不再整段生成
-   - 每个 clip 精确匹配自己的旁白长度
-   - 最后拼接 + 叠加背景音乐
+4. **旁白 + 配乐 + 装配** (IMA Studio TTS + Suno + ffmpeg)
+   - 整段旁白一次性 TTS（seed-tts-2.0）
+   - 配乐一次性生成（Suno sonic，instrumental）
+   - TTS + 配乐可与视频生成并行
+   - ffmpeg 组装：clip 缩放 → xfade 转场 → 混音 → 淡出
+   - **关键：旁白时长驱动视频总长，不裁剪旁白**
 
 **禁止的 AI 效果（造假）：**
 - 不添加照片中没有的物体（家具、人、车、宠物）
@@ -406,10 +467,11 @@ Requirements:
 
 | Format | Resolution | Duration | 默认渠道 |
 |--------|-----------|----------|----------|
-| Vertical | 1080x1920 (9:16) | 15-30s | Reels, TikTok, Shorts, 小红书, 抖音 |
-| Horizontal | 1920x1080 (16:9) | 15-30s | YouTube, website, MLS, Zillow |
+| Vertical | 1080x1920 (9:16) | 25-45s | Reels, TikTok, Shorts, 小红书, 抖音 |
+| Horizontal | 1920x1080 (16:9) | 25-45s | YouTube, website, MLS, Zillow |
 
 每次只生成一种格式。用户可指定 `aspect_ratio` 或 `channel`，未指定时默认竖屏 9:16。
+视频时长由旁白驱动（通常 30-45 秒），不硬编码时长。
 
 ---
 
