@@ -4,12 +4,14 @@ Listing Video Agent — Claude API Unified Client
 All Claude calls go through here: lazy singleton, retries, JSON parsing.
 """
 
+import asyncio
 import json
 import re
 import time
 import logging
 
 _client = None
+_async_client = None
 logger = logging.getLogger(__name__)
 
 
@@ -60,6 +62,46 @@ def call_claude(request: dict, max_retries: int = 3) -> str:
                     attempt + 1, max_retries, e, wait,
                 )
                 time.sleep(wait)
+
+    raise RuntimeError(f"Claude API failed after {max_retries} retries: {last_error}")
+
+
+def get_async_client():
+    """Lazy-load a singleton async Anthropic client."""
+    global _async_client
+    if _async_client is None:
+        import anthropic
+        _async_client = anthropic.AsyncAnthropic()
+    return _async_client
+
+
+async def call_claude_async(request: dict, max_retries: int = 3) -> str:
+    """Async version of call_claude for concurrent API calls."""
+    client = get_async_client()
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            resp = await client.messages.create(
+                model=request["model"],
+                max_tokens=request["max_tokens"],
+                messages=request["messages"],
+            )
+            text_parts = [
+                block.text for block in resp.content
+                if hasattr(block, "text")
+            ]
+            return "\n".join(text_parts)
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.warning(
+                    "Claude async API attempt %d/%d failed: %s — retrying in %ds",
+                    attempt + 1, max_retries, e, wait,
+                )
+                await asyncio.sleep(wait)
 
     raise RuntimeError(f"Claude API failed after {max_retries} retries: {last_error}")
 

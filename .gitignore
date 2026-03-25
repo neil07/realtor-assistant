@@ -1,8 +1,13 @@
 # OpenClaw 运行时状态
 .openclaw/workspace-state.json
 
-# Claude Code 本地记忆
+# Claude Code
+.claude/
 memory/
+
+# Python
+__pycache__/
+*.pyc
 
 # Skill 产出文件（视频/音频/图片等大文件）
 skills/listing-video/output/

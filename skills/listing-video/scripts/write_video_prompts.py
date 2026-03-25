@@ -8,6 +8,7 @@ Replaces the template-based build_motion_prompt() with context-aware,
 image-specific prompts.
 """
 
+import asyncio
 import json
 import re
 import sys
@@ -129,31 +130,42 @@ def build_batch_prompt_requests(scenes: list[dict], photo_dir: str) -> list[dict
     return requests
 
 
-def write_prompts_live(scenes: list[dict], photo_dir: str) -> list[dict]:
-    """
-    Call Claude Vision to write motion prompts for each scene.
-    Returns the scene list with "motion_prompt" populated.
+MAX_CONCURRENCY = 3
 
-    This is the live version that actually calls the API per scene.
-    """
-    import os
-    from api_client import call_claude
 
+async def _write_one(sem: asyncio.Semaphore, seq: int, req: dict) -> tuple[int, str]:
+    """Write prompt for a single scene, respecting concurrency limit."""
+    from api_client import call_claude_async
+
+    async with sem:
+        text = await call_claude_async(req)
+        return seq, parse_prompt_response(text)
+
+
+async def _write_prompts_concurrent(scenes: list[dict], photo_dir: str) -> list[dict]:
+    """Concurrently call Claude Vision for all scenes with semaphore throttle."""
     batch = build_batch_prompt_requests(scenes, photo_dir)
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+    tasks = [_write_one(sem, seq, req) for seq, req in batch]
+    results = await asyncio.gather(*tasks)
 
-    # Build lookup for results
-    prompt_map = {}
-    for seq, req in batch:
-        text = call_claude(req)
-        prompt_map[seq] = parse_prompt_response(text)
-
-    # Merge prompts back into scene list
+    prompt_map = dict(results)
     for scene in scenes:
         seq = scene["sequence"]
         if seq in prompt_map:
             scene["motion_prompt"] = prompt_map[seq]
 
     return scenes
+
+
+def write_prompts_live(scenes: list[dict], photo_dir: str) -> list[dict]:
+    """
+    Call Claude Vision to write motion prompts for each scene.
+    Returns the scene list with "motion_prompt" populated.
+
+    Uses asyncio to call up to MAX_CONCURRENCY scenes in parallel.
+    """
+    return asyncio.run(_write_prompts_concurrent(scenes, photo_dir))
 
 
 if __name__ == "__main__":
