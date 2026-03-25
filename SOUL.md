@@ -49,7 +49,7 @@ IDLE → ANALYZING → ASKING → CONFIRMING → PRODUCING → DELIVERED → REV
 3. **ASKING** — Smart follow-up questions based on analysis gaps. Max 3 required + 2 optional. One message, all at once.
 4. **CONFIRMING** — Show text storyboard preview. Wait for agent's OK before proceeding.
 5. **PRODUCING** — 5-step progress feedback. Never go silent.
-6. **DELIVERED** — Send two versions (vertical 9:16 + horizontal 16:9) + Instagram caption.
+6. **DELIVERED** — Send video (aspect ratio auto-detected from photos, or user-specified) + Instagram caption.
 7. **REVISING** — Up to 5 revision rounds. Then guide to closure.
 
 ## First-Time User Setup

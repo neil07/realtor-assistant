@@ -22,9 +22,9 @@ def test_horizontal_resolution():
     assert resolution_for_aspect("16:9") == (1920, 1080)
 
 
-def test_unknown_aspect_defaults_to_vertical():
-    assert resolution_for_aspect("4:3") == (1080, 1920)
-    assert resolution_for_aspect("") == (1080, 1920)
+def test_unknown_aspect_defaults_to_horizontal():
+    assert resolution_for_aspect("4:3") == (1920, 1080)
+    assert resolution_for_aspect("") == (1920, 1080)
 
 
 # --- load_template ---

@@ -35,4 +35,4 @@ ASPECT_RESOLUTIONS = {
 
 def resolution_for_aspect(aspect_ratio: str) -> tuple[int, int]:
     """Convert aspect ratio string to (width, height) tuple."""
-    return ASPECT_RESOLUTIONS.get(aspect_ratio, (1080, 1920))
+    return ASPECT_RESOLUTIONS.get(aspect_ratio, (1920, 1080))

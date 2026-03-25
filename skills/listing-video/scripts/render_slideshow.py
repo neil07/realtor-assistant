@@ -277,7 +277,7 @@ if __name__ == "__main__":
     kb.add_argument("output", help="Output video path")
     kb.add_argument("--duration", type=float, default=3.0, help="Duration in seconds")
     kb.add_argument("--motion", default="slow_push", help="Motion type")
-    kb.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio (9:16 or 16:9)")
+    kb.add_argument("--aspect-ratio", default="16:9", help="Aspect ratio (9:16 or 16:9)")
 
     # CTA end frame
     cta = subparsers.add_parser("cta", help="Create CTA end frame")
@@ -288,7 +288,7 @@ if __name__ == "__main__":
     cta.add_argument("--template-file", default=None, help="Template JSON for styling")
     cta.add_argument("--duration", type=float, default=4.0, help="Duration in seconds")
     cta.add_argument("--tagline", default="Let's go see it.", help="CTA tagline")
-    cta.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio (9:16 or 16:9)")
+    cta.add_argument("--aspect-ratio", default="16:9", help="Aspect ratio (9:16 or 16:9)")
 
     args = parser.parse_args()
 

@@ -758,14 +758,14 @@ if __name__ == "__main__":
     single.add_argument("--duration", type=int, default=5, help="Duration in seconds")
     single.add_argument("--output", default=None, help="Output video path")
     single.add_argument("--last-frame", default=None, help="Last frame image path")
-    single.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio")
+    single.add_argument("--aspect-ratio", default="16:9", help="Aspect ratio")
 
     # Batch from scene plan
     batch = subparsers.add_parser("batch", help="Generate all clips from scene plan")
     batch.add_argument("--scene-plan-file", required=True, help="Scene plan JSON file")
     batch.add_argument("--photo-dir", required=True, help="Photo directory")
     batch.add_argument("--output-dir", required=True, help="Output directory")
-    batch.add_argument("--aspect-ratio", default="9:16", help="Aspect ratio")
+    batch.add_argument("--aspect-ratio", default="16:9", help="Aspect ratio")
 
     args = parser.parse_args()
 

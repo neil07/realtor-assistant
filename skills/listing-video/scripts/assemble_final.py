@@ -250,20 +250,44 @@ CHANNEL_DEFAULTS = {
 }
 
 
+def detect_aspect_ratio_from_video(video_path: str) -> str:
+    """Detect whether source video is vertical or horizontal."""
+    cmd = [
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "stream=width,height",
+        "-of", "json", video_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            streams = json.loads(result.stdout).get("streams", [{}])
+            if streams:
+                w = streams[0].get("width", 0)
+                h = streams[0].get("height", 0)
+                if w and h:
+                    return "9:16" if h > w else "16:9"
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return "16:9"
+
+
 def resolve_aspect_ratio(
     aspect_ratio: str = None,
     channel: str = None,
+    source_video: str = None,
 ) -> str:
     """
     Determine the output aspect ratio.
 
-    Priority: explicit aspect_ratio > channel default > "9:16".
+    Priority: explicit aspect_ratio > channel default > source video detection > "16:9".
     """
     if aspect_ratio:
         return aspect_ratio
     if channel:
-        return CHANNEL_DEFAULTS.get(channel.lower(), "9:16")
-    return "9:16"
+        return CHANNEL_DEFAULTS.get(channel.lower(), "16:9")
+    if source_video:
+        return detect_aspect_ratio_from_video(source_video)
+    return "16:9"
 
 
 def create_output_format(
@@ -577,7 +601,7 @@ def full_assembly(
         return audio_result
 
     # Step 4: Create output format
-    target_ratio = resolve_aspect_ratio(aspect_ratio, channel)
+    target_ratio = resolve_aspect_ratio(aspect_ratio, channel, source_video=final_path)
     format_result = create_output_format(final_path, output_dir, listing_id, target_ratio)
 
     # Clean up intermediate files
@@ -779,7 +803,7 @@ def full_assembly_v2(
         final_path = concat_path
 
     # Step 4: Create output format
-    target_ratio = resolve_aspect_ratio(aspect_ratio, channel)
+    target_ratio = resolve_aspect_ratio(aspect_ratio, channel, source_video=final_path)
     format_result = create_output_format(final_path, output_dir, listing_id, target_ratio)
 
     # Clean up intermediate files
@@ -1126,7 +1150,7 @@ def full_assembly_v3(
         final_path = concat_path
 
     # Step 6: Create output format
-    target_ratio = resolve_aspect_ratio(aspect_ratio, channel)
+    target_ratio = resolve_aspect_ratio(aspect_ratio, channel, source_video=final_path)
     format_result = create_output_format(final_path, output_dir, listing_id, target_ratio)
 
     # Cleanup
@@ -1176,7 +1200,7 @@ if __name__ == "__main__":
     v3.add_argument("--ambient-file", default=None, help="Ambient plan JSON file")
     v3.add_argument("--output-dir", required=True, help="Output directory")
     v3.add_argument("--listing-id", default="listing", help="Listing identifier for filenames")
-    v3.add_argument("--aspect-ratio", default="9:16", help="Output aspect ratio")
+    v3.add_argument("--aspect-ratio", default=None, help="Output aspect ratio (auto-detected if omitted)")
     v3.add_argument("--channel", default=None, help="Publishing channel (reels/tiktok/youtube)")
 
     args = parser.parse_args()
