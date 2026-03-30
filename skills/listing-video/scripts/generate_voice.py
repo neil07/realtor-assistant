@@ -319,17 +319,25 @@ def generate_scene_voiceovers(
 
         if result["status"] == "success":
             # Get actual audio duration
-            import subprocess
-            dur_cmd = [
-                "ffprobe", "-v", "quiet",
-                "-show_entries", "format=duration",
-                "-of", "json", audio_path,
-            ]
-            dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
             duration = 0.0
-            if dur_result.returncode == 0:
-                dur_data = json.loads(dur_result.stdout)
-                duration = float(dur_data.get("format", {}).get("duration", 0))
+            try:
+                from mutagen.mp3 import MP3
+
+                duration = float(getattr(MP3(audio_path).info, "length", 0.0) or 0.0)
+            except Exception:
+                import subprocess
+                dur_cmd = [
+                    "ffprobe", "-v", "quiet",
+                    "-show_entries", "format=duration",
+                    "-of", "json", audio_path,
+                ]
+                try:
+                    dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
+                    if dur_result.returncode == 0:
+                        dur_data = json.loads(dur_result.stdout)
+                        duration = float(dur_data.get("format", {}).get("duration", 0))
+                except FileNotFoundError:
+                    duration = 0.0
 
             results.append({
                 "sequence": seq,

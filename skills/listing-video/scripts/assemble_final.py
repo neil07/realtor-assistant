@@ -9,6 +9,37 @@ import json
 import os
 import subprocess
 
+import cv2
+
+
+def _run_ffprobe_json(args: list[str]) -> dict | None:
+    """Run ffprobe and return parsed JSON, or None when ffprobe is unavailable."""
+    cmd = ["ffprobe", "-v", "quiet", *args]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except Exception:
+        return None
+
+
+def _opencv_video_meta(path: str) -> tuple[int, int, float, float]:
+    """Return width, height, fps, duration via OpenCV when ffprobe is unavailable."""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        return 0, 0, 0.0, 0.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+    cap.release()
+    duration = (frames / fps) if fps > 0 and frames > 0 else 0.0
+    return width, height, fps, duration
+
 
 def concat_clips(
     clip_paths: list[str],
@@ -26,51 +57,70 @@ def concat_clips(
     if not clip_paths:
         return {"status": "error", "message": "No clips provided"}
 
+    if len(clip_paths) == 1:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", clip_paths[0],
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            output_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            return {"status": "error", "message": result.stderr[-500:]}
+        return {"status": "success", "video_path": output_path}
+
     # Create concat file
     concat_file = output_path + ".concat.txt"
     with open(concat_file, "w") as f:
         for path in clip_paths:
             f.write(f"file '{os.path.abspath(path)}'\n")
 
-    if transitions and any(t.get("type") == "crossfade" for t in transitions):
-        # Use xfade filter for crossfade transitions
-        result = _concat_with_crossfade(clip_paths, output_path, transitions)
-    else:
-        # Simple concat
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_file,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            output_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        if transitions and any(t.get("type") == "crossfade" for t in transitions):
+            # Use xfade filter for crossfade transitions
+            result = _concat_with_crossfade(clip_paths, output_path, transitions)
+            if result.get("status") != "success":
+                return result
+        else:
+            # Simple concat
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_file,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                output_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
-        if result.returncode != 0:
-            return {"status": "error", "message": result.stderr[-500:]}
-
-    # Clean up
-    os.remove(concat_file)
+            if result.returncode != 0:
+                return {"status": "error", "message": result.stderr[-500:]}
+    finally:
+        if os.path.exists(concat_file):
+            os.remove(concat_file)
 
     return {"status": "success", "video_path": output_path}
 
 
 def _probe_resolution(path: str) -> tuple[int, int]:
     """Return (width, height) of the first video stream in a file, or (0, 0)."""
-    cmd = [
-        "ffprobe", "-v", "quiet",
+    data = _run_ffprobe_json([
         "-show_entries", "stream=width,height",
         "-of", "json", path,
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode == 0:
-        streams = json.loads(r.stdout).get("streams", [{}])
+    ])
+    if data:
+        streams = data.get("streams", [{}])
         if streams:
             return streams[0].get("width", 0) or 0, streams[0].get("height", 0) or 0
-    return 0, 0
+    width, height, _fps, _duration = _opencv_video_meta(path)
+    return width, height
 
 
 def _concat_with_crossfade(
@@ -115,10 +165,16 @@ def _concat_with_crossfade(
 
     # Probe fps to detect mismatches — xfade also requires identical fps.
     def _probe_fps(path: str) -> str:
-        cmd = ["ffprobe", "-v", "quiet", "-show_entries", "stream=r_frame_rate",
-               "-select_streams", "v:0", "-of", "csv=p=0", path]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        return r.stdout.strip().split("\n")[0].strip() if r.returncode == 0 else ""
+        try:
+            cmd = ["ffprobe", "-v", "quiet", "-show_entries", "stream=r_frame_rate",
+                   "-select_streams", "v:0", "-of", "csv=p=0", path]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0:
+                return r.stdout.strip().split("\n")[0].strip()
+        except FileNotFoundError:
+            pass
+        _w, _h, fps, _duration = _opencv_video_meta(path)
+        return f"{int(round(fps))}/1" if fps > 0 else ""
 
     fps_vals = [_probe_fps(p) for p in clip_paths]
     target_fps = next((f for f in fps_vals if f), "30/1")
@@ -384,18 +440,9 @@ def create_output_format(
     output_path = os.path.join(output_dir, f"{listing_id}_{tag}.mp4")
 
     # Probe source dimensions
-    probe_cmd = [
-        "ffprobe", "-v", "quiet",
-        "-show_entries", "stream=width,height",
-        "-of", "json", video_path,
-    ]
-    probe = subprocess.run(probe_cmd, capture_output=True, text=True)
-    src_w, src_h = 1080, 1920  # default assumption
-    if probe.returncode == 0:
-        streams = json.loads(probe.stdout).get("streams", [{}])
-        if streams:
-            src_w = streams[0].get("width", 1080)
-            src_h = streams[0].get("height", 1920)
+    src_w, src_h = _probe_resolution(video_path)
+    if src_w <= 0 or src_h <= 0:
+        src_w, src_h = 1080, 1920  # default assumption
 
     src_vertical = src_h > src_w
     target_vertical = aspect_ratio == "9:16"
@@ -456,16 +503,17 @@ def create_both_formats(
 
 def check_has_audio(file_path: str) -> bool:
     """Return True if the file has at least one audio stream."""
-    cmd = [
-        "ffprobe", "-v", "quiet",
+    data = _run_ffprobe_json([
         "-show_entries", "stream=codec_type",
         "-of", "json", file_path,
-    ]
+    ])
+    if data:
+        streams = data.get("streams", [])
+        return any(s.get("codec_type") == "audio" for s in streams)
+    cmd = ["ffmpeg", "-i", file_path, "-f", "null", "-"]
     result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return False
-    streams = json.loads(result.stdout).get("streams", [])
-    return any(s.get("codec_type") == "audio" for s in streams)
+    stderr = (result.stderr or "").lower()
+    return "audio:" in stderr or ("stream #0:" in stderr and "audio" in stderr)
 
 
 def _burn_subtitle_on_clip(
@@ -635,18 +683,9 @@ def add_text_overlays(
         return {"status": "success", "video_path": output_path}
 
     # Probe video dimensions
-    probe_cmd = [
-        "ffprobe", "-v", "quiet",
-        "-show_entries", "stream=width,height",
-        "-of", "json", video_path,
-    ]
-    probe = subprocess.run(probe_cmd, capture_output=True, text=True)
-    vid_w, vid_h = 1080, 1920  # default 9:16
-    if probe.returncode == 0:
-        streams = json.loads(probe.stdout).get("streams", [{}])
-        if streams:
-            vid_w = streams[0].get("width", 1080) or 1080
-            vid_h = streams[0].get("height", 1920) or 1920
+    vid_w, vid_h = _probe_resolution(video_path)
+    if vid_w <= 0 or vid_h <= 0:
+        vid_w, vid_h = 1080, 1920  # default 9:16
 
     title_end = min(5.0, duration * 0.3)
     cta_start = max(0.0, duration - 4.0)
@@ -716,18 +755,15 @@ def add_text_overlays(
 
 def get_duration(file_path: str) -> float:
     """Get duration of audio/video file in seconds."""
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
+    data = _run_ffprobe_json([
         "-show_entries", "format=duration",
         "-of", "json",
         file_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode == 0:
-        data = json.loads(result.stdout)
-        return float(data.get("format", {}).get("duration", 0))
-    return 0.0
+    ])
+    if data:
+        return float(data.get("format", {}).get("duration", 0) or 0)
+    _w, _h, _fps, duration = _opencv_video_meta(file_path)
+    return duration
 
 
 def _ensure_video_covers_audio(
