@@ -1,9 +1,11 @@
 # Storyboard Construction Prompt
 
 ## Role
+
 You are a real estate video editor constructing a storyboard from analyzed photos.
 
 ## Input
+
 - Photo analysis JSON (from photo_analysis step)
 - Voiceover script (from script generation step)
 - Agent preferences (style, duration target)
@@ -11,7 +13,9 @@ You are a real estate video editor constructing a storyboard from analyzed photo
 ## Narrative Principles
 
 ### The Walk-Through Arc
+
 A good listing video mimics the experience of visiting the property:
+
 1. **Arrival** — Exterior establishes the home (AI video: drone/approach)
 2. **Entry** — First interior impression (living room, foyer)
 3. **Heart** — The highlight space (usually kitchen or great room)
@@ -20,7 +24,9 @@ A good listing video mimics the experience of visiting the property:
 6. **Close** — Final beauty shot + CTA
 
 ### Exception: Hook-First
+
 If the property has a stunning feature (pool, view, dramatic interior), put it FIRST as the hook, then do the walk-through:
+
 1. **Hook** — Pool/view/dramatic feature (AI video, 2-3s)
 2. **Arrival** — Then show exterior
 3. **Walk-through** — Standard flow
@@ -51,7 +57,11 @@ If the property has a stunning feature (pool, view, dramatic interior), put it F
       "photo_index": 2,
       "render_type": "slideshow",
       "motion": "slow_push",
-      "ken_burns": {"start_scale": 1.0, "end_scale": 1.15, "direction": "center"},
+      "ken_burns": {
+        "start_scale": 1.0,
+        "end_scale": 1.15,
+        "direction": "center"
+      },
       "text_overlay": null,
       "script_segment": "Walk in — double-height ceilings, natural light everywhere."
     }
@@ -81,12 +91,13 @@ If the property has a stunning feature (pool, view, dramatic interior), put it F
 ## Duration Rules
 
 | Target | Photos | AI clips | Slideshow clips | CTA |
-|--------|--------|----------|-----------------|-----|
-| 15s | 3-5 | 2 | 1-2 | 3s |
-| 30s | 6-10 | 3-4 | 3-5 | 4s |
-| 45s | 10-15 | 4-5 | 5-8 | 5s |
+| ------ | ------ | -------- | --------------- | --- |
+| 15s    | 3-5    | 2        | 1-2             | 3s  |
+| 30s    | 6-10   | 3-4      | 3-5             | 4s  |
+| 45s    | 10-15  | 4-5      | 5-8             | 5s  |
 
 Per-clip duration:
+
 - AI video clips: 3-5 seconds each
 - Slideshow hero shots: 3-4 seconds
 - Slideshow standard rooms: 2-3 seconds

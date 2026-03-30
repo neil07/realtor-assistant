@@ -27,7 +27,11 @@ For each photo, provide:
     "estimated_tier": "mid_range|luxury|starter|investment",
     "bedrooms_detected": 3,
     "bathrooms_detected": 2,
-    "key_selling_points": ["heated pool", "renovated kitchen", "mountain views"],
+    "key_selling_points": [
+      "heated pool",
+      "renovated kitchen",
+      "mountain views"
+    ],
     "missing_shots": ["exterior", "aerial"],
     "overall_quality": "good|excellent|needs_improvement"
   },

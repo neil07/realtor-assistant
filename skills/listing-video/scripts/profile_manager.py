@@ -5,7 +5,6 @@ Stores and retrieves per-agent preferences, voice clones, and usage stats.
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -35,10 +34,13 @@ def create_profile(
     music: str = "modern",
     show_price: bool = True,
     format_pref: str = "both",
+    market_area: str = "",
+    language: str = "en",
+    branding_colors: list[str] | None = None,
 ) -> dict:
     """Create a new agent profile."""
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     profile = {
         "phone": phone,
         "name": name,
@@ -51,8 +53,24 @@ def create_profile(
             "music": music,
             "format": format_pref,
             "show_price": show_price,
-            "language": "en",
+            "language": language,
         },
+        # 2.0: branding + market context
+        "content_preferences": {
+            "market_area": market_area or city,
+            "branding_colors": branding_colors or ["#2C3E50", "#BDC3C7"],
+            "language": language,
+            "daily_push_enabled": True,  # opt-out via "停止每日推送"
+        },
+        # 2.0: learned from feedback over time
+        "learned_patterns": {
+            "style_confirmed": [],       # styles agent accepted without complaint
+            "music_rejected": [],        # music moods agent has rejected
+            "always_include": [],        # elements agent always requests (e.g. "personal_photo")
+            "frequently_requested": [],  # free-form adjustments agent often asks for
+        },
+        # 2.0: per-job revision history
+        "revision_history": [],
         "market_knowledge": {},
         "stats": {
             "videos_created": 0,
@@ -61,7 +79,7 @@ def create_profile(
         },
         "voice_clone_offered": False,
     }
-    
+
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile
 
@@ -71,17 +89,17 @@ def update_profile(phone: str, updates: dict) -> dict:
     profile = get_profile(phone)
     if not profile:
         return {"status": "error", "message": "Profile not found"}
-    
+
     def deep_update(base, new):
         for k, v in new.items():
             if isinstance(v, dict) and isinstance(base.get(k), dict):
                 deep_update(base[k], v)
             else:
                 base[k] = v
-    
+
     deep_update(profile, updates)
     profile["stats"]["last_use"] = datetime.now().isoformat()
-    
+
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile
 
@@ -91,12 +109,155 @@ def increment_video_count(phone: str) -> int:
     profile = get_profile(phone)
     if not profile:
         return 0
-    
+
+    if "stats" not in profile:
+        profile["stats"] = {}
     profile["stats"]["videos_created"] = profile["stats"].get("videos_created", 0) + 1
     profile["stats"]["last_use"] = datetime.now().isoformat()
-    
+
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile["stats"]["videos_created"]
+
+
+def record_feedback(
+    phone: str,
+    job_id: str,
+    feedback_text: str,
+    classified: dict,
+    revision_round: int = 1,
+) -> dict:
+    """
+    Record a revision feedback event and update learned patterns.
+
+    Args:
+        phone: Agent phone number
+        job_id: The job that received feedback
+        feedback_text: Raw feedback from agent
+        classified: Output from feedback_classifier, e.g.
+            {"category": "music", "change": "upbeat", "old_value": "calm",
+             "new_value": "upbeat", "severity": "minor"}
+        revision_round: Which revision round this is (1-based)
+
+    Returns:
+        Updated profile dict
+    """
+    profile = get_profile(phone)
+    if not profile:
+        return {"status": "error", "message": "Profile not found"}
+
+    # Ensure 2.0 fields exist (backward-compat for older profiles)
+    profile.setdefault("learned_patterns", {
+        "style_confirmed": [],
+        "music_rejected": [],
+        "always_include": [],
+        "frequently_requested": [],
+    })
+    profile.setdefault("revision_history", [])
+
+    # Append to revision history (keep last 20)
+    profile["revision_history"].append({
+        "job_id": job_id,
+        "round": revision_round,
+        "feedback_text": feedback_text,
+        "classified": classified,
+        "timestamp": datetime.now().isoformat(),
+    })
+    if len(profile["revision_history"]) > 20:
+        profile["revision_history"] = profile["revision_history"][-20:]
+
+    # Update learned patterns based on classification
+    category = classified.get("category", "")
+    old_value = classified.get("old_value", "")
+    new_value = classified.get("new_value", "")
+
+    if category == "music" and old_value:
+        rejected = profile["learned_patterns"].setdefault("music_rejected", [])
+        if old_value not in rejected:
+            rejected.append(old_value)
+        # Also update the preference to the new value if provided
+        if new_value:
+            profile["preferences"]["music"] = new_value
+
+    elif category == "style" and new_value:
+        profile["preferences"]["style"] = new_value
+        confirmed = profile["learned_patterns"].setdefault("style_confirmed", [])
+        if new_value not in confirmed:
+            confirmed.append(new_value)
+
+    elif category == "include" and new_value:
+        always = profile["learned_patterns"].setdefault("always_include", [])
+        if new_value not in always:
+            always.append(new_value)
+
+    elif category == "general" and feedback_text:
+        frequent = profile["learned_patterns"].setdefault("frequently_requested", [])
+        # Keep last 10 free-form requests
+        frequent.append(feedback_text[:100])
+        profile["learned_patterns"]["frequently_requested"] = frequent[-10:]
+
+    profile["stats"]["last_use"] = datetime.now().isoformat()
+    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    return profile
+
+
+def get_active_agents(days: int = 7) -> list[dict]:
+    """
+    Return profiles of agents who have interacted within the last N days.
+    Used by daily scheduler to know who to push content to.
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.now() - timedelta(days=days)
+    active = []
+
+    if not PROFILES_DIR.exists():
+        return []
+
+    for path in PROFILES_DIR.glob("*.json"):
+        try:
+            profile = json.loads(path.read_text())
+            last_use_str = profile.get("stats", {}).get("last_use", "")
+            if not last_use_str:
+                continue
+            # Handle both timezone-aware and naive datetimes
+            last_use_str = last_use_str.split("+")[0].split("Z")[0]
+            last_use = datetime.fromisoformat(last_use_str)
+            if last_use >= cutoff:
+                active.append(profile)
+        except Exception:
+            continue
+
+    return active
+
+
+def get_preference_context(phone: str) -> str:
+    """
+    Build a human-readable preference summary for use in prompts.
+    Helps Claude understand this agent's known preferences without sending full JSON.
+    """
+    profile = get_profile(phone)
+    if not profile:
+        return ""
+
+    prefs = profile.get("preferences", {})
+    patterns = profile.get("learned_patterns", {})
+    content_prefs = profile.get("content_preferences", {})
+
+    lines = []
+    if prefs.get("style"):
+        lines.append(f"Preferred style: {prefs['style']}")
+    if prefs.get("music"):
+        lines.append(f"Preferred music: {prefs['music']}")
+    if patterns.get("music_rejected"):
+        lines.append(f"Music to avoid: {', '.join(patterns['music_rejected'])}")
+    if patterns.get("always_include"):
+        lines.append(f"Always include: {', '.join(patterns['always_include'])}")
+    if patterns.get("frequently_requested"):
+        lines.append(f"Often requests: {patterns['frequently_requested'][-1]}")
+    if content_prefs.get("market_area"):
+        lines.append(f"Market area: {content_prefs['market_area']}")
+
+    return "\n".join(lines)
 
 
 def set_voice_clone(phone: str, voice_id: str) -> dict:
@@ -114,7 +275,7 @@ def add_market_knowledge(phone: str, key: str, value: str) -> dict:
     profile = get_profile(phone)
     if not profile:
         return {"status": "error", "message": "Profile not found"}
-    
+
     profile.setdefault("market_knowledge", {})[key] = value
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile
@@ -137,6 +298,6 @@ def should_offer_voice_clone(phone: str) -> bool:
     )
 
 
-def mark_voice_clone_offered(phone: str):
+def mark_voice_clone_offered(phone: str) -> None:
     """Mark that we've offered voice cloning to this agent."""
     update_profile(phone, {"voice_clone_offered": True})

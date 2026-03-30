@@ -8,10 +8,16 @@ Replaces the template-based build_motion_prompt() with context-aware,
 image-specific prompts.
 """
 
+import asyncio
 import json
 import re
 import sys
 from pathlib import Path
+
+import anthropic
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
 WRITER_PROMPT = (Path(__file__).parent.parent / "prompts" / "refer" / "video_prompt_writer").read_text()
 
@@ -72,7 +78,7 @@ def build_prompt_request(
     })
 
     return {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "max_tokens": 1024,
         "messages": [{"role": "user", "content": content}],
     }
@@ -129,14 +135,119 @@ def build_batch_prompt_requests(scenes: list[dict], photo_dir: str) -> list[dict
     return requests
 
 
+def run_single(
+    first_frame_path: str,
+    scene_desc: str,
+    last_frame_path: str = None,
+) -> str:
+    """
+    Run prompt writing for a single scene: build request → call Claude API → parse.
+
+    Returns:
+        Video generation prompt string
+    """
+    request = build_prompt_request(first_frame_path, scene_desc, last_frame_path)
+    client = anthropic.Anthropic()
+    response = client.messages.create(**request)
+    return parse_prompt_response(response.content[0].text)
+
+
+def run_batch(scenes: list[dict], photo_dir: str) -> list[dict]:
+    """
+    Run prompt writing for all scenes in a plan.
+
+    Args:
+        scenes: Scene plan from plan_scenes.parse_scene_plan()
+        photo_dir: Directory containing source photos
+
+    Returns:
+        List of dicts: [{"sequence": int, "motion_prompt": str}, ...]
+    """
+    requests = build_batch_prompt_requests(scenes, photo_dir)
+    client = anthropic.Anthropic()
+    results = []
+
+    for seq, req in requests:
+        response = client.messages.create(**req)
+        prompt = parse_prompt_response(response.content[0].text)
+        results.append({"sequence": seq, "motion_prompt": prompt})
+
+    return results
+
+
+async def _write_single_async(
+    seq: int,
+    request: dict,
+    client: anthropic.AsyncAnthropic,
+    semaphore: asyncio.Semaphore,
+) -> dict | Exception:
+    """Write a single scene prompt asynchronously with concurrency control."""
+    async with semaphore:
+        response = await client.messages.create(**request)
+        prompt = parse_prompt_response(response.content[0].text)
+        return {"sequence": seq, "motion_prompt": prompt}
+
+
+async def run_batch_async(scenes: list[dict], photo_dir: str) -> list[dict]:
+    """
+    Run prompt writing for all scenes concurrently (max 3 parallel).
+
+    Drop-in async replacement for run_batch(). Use with:
+        results = await run_batch_async(scenes, photo_dir)
+    or from sync code:
+        results = asyncio.run(run_batch_async(scenes, photo_dir))
+
+    Failed scenes are skipped (logged to stderr). Successful results are
+    returned sorted by sequence number.
+
+    Args:
+        scenes: Scene plan from plan_scenes.parse_scene_plan()
+        photo_dir: Directory containing source photos
+
+    Returns:
+        List of dicts sorted by sequence: [{"sequence": int, "motion_prompt": str}, ...]
+    """
+    requests = build_batch_prompt_requests(scenes, photo_dir)
+    if not requests:
+        return []
+
+    async with anthropic.AsyncAnthropic() as async_client:
+        semaphore = asyncio.Semaphore(3)
+        tasks = [
+            _write_single_async(seq, req, async_client, semaphore)
+            for seq, req in requests
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = []
+    for r in raw_results:
+        if isinstance(r, Exception):
+            print(f"[write_video_prompts] scene failed: {r}", file=sys.stderr)
+        else:
+            results.append(r)
+    return sorted(results, key=lambda x: x["sequence"])
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: write_video_prompts.py <first_frame> <scene_desc> [last_frame]")
+        print("  Add --dry-run to only output the API request.")
         sys.exit(1)
 
-    req = build_prompt_request(
-        first_frame_path=sys.argv[1],
-        scene_desc=sys.argv[2],
-        last_frame_path=sys.argv[3] if len(sys.argv) > 3 else None,
-    )
-    print(json.dumps(req, indent=2, default=str))
+    dry_run = "--dry-run" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--dry-run"]
+
+    if dry_run:
+        req = build_prompt_request(
+            first_frame_path=args[0],
+            scene_desc=args[1],
+            last_frame_path=args[2] if len(args) > 2 else None,
+        )
+        print(json.dumps(req, indent=2, default=str))
+    else:
+        prompt = run_single(
+            first_frame_path=args[0],
+            scene_desc=args[1],
+            last_frame_path=args[2] if len(args) > 2 else None,
+        )
+        print(f"🎥 Video prompt:\n{prompt}")

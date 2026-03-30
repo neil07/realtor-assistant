@@ -1,226 +1,50 @@
 #!/usr/bin/env python3
 """
 Listing Video Agent — AI Video Generation
-Primary: ByteDance Seedance 1.0 Pro via Volcano Ark API (image-to-video).
-Fallback: Runway Gen-4 Turbo.
+Primary: IMA Studio API (Kling, WAN, Hailuo, etc.)
+Fallback: Local Ken Burns slideshow (ffmpeg).
 """
 
-import base64
 import json
 import os
 import sys
-import time
-import requests
 from pathlib import Path
 
-ARK_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
-RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
-
-
 # ---------------------------------------------------------------------------
-# Primary: Seedance 1.0 Pro
+# IMA Studio — primary engine
 # ---------------------------------------------------------------------------
 
-def _encode_image_uri(image_path: str) -> str:
-    """Encode an image file as a base64 data URI."""
-    with open(image_path, "rb") as f:
-        image_b64 = base64.standard_b64encode(f.read()).decode()
-    ext = Path(image_path).suffix.lower().lstrip(".")
-    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-    media_type = mime.get(ext, "image/jpeg")
-    return f"data:{media_type};base64,{image_b64}"
-
-
-def generate_seedance_clip(
+def generate_ima_clip(
     image_path: str,
     motion_prompt: str,
     duration: int = 5,
     output_path: str = None,
     last_frame_path: str = None,
-    model: str = "doubao-seedance-1-0-pro-250528",
     aspect_ratio: str = "9:16",
-    resolution: str = "1080p",
+    model_id: str = None,
 ) -> dict:
     """
-    Generate a video clip from a photo using Seedance 1.0 Pro.
+    Generate a video clip using IMA Studio API.
 
-    Supports first-frame-only or first+last frame mode.
-    When last_frame_path is provided, Seedance generates a smooth transition
-    between the two images, enabling seamless scene chaining.
-
-    Args:
-        image_path: Path to first frame image
-        motion_prompt: Vivid description of camera motion & scene atmosphere
-        duration: Clip duration in seconds (5-10)
-        output_path: Where to save the output video
-        last_frame_path: Optional path to last frame image (for scene transitions)
-        model: Seedance model ID
-        aspect_ratio: "9:16" for vertical, "16:9" for horizontal
-        resolution: "480p", "720p", or "1080p"
-
-    Returns:
-        {"status": "success", "video_path": str, ...}
+    Supports image-to-video and first+last frame mode.
     """
-    api_key = os.environ.get("SEEDDANCE_API_KEY")
-    if not api_key:
-        return {"status": "error", "message": "SEEDDANCE_API_KEY not set"}
+    from ima_client import generate_video_clip
 
     if not output_path:
         output_path = str(Path(image_path).with_suffix(".mp4"))
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    if not model_id:
+        model_id = os.environ.get("IMA_VIDEO_MODEL", "kling-v2-6")
 
-    # Build content array: first frame + optional last frame + prompt
-    first_uri = _encode_image_uri(image_path)
-    content = [
-        {"type": "image_url", "image_url": {"url": first_uri}},
-    ]
-
-    if last_frame_path and os.path.exists(last_frame_path):
-        last_uri = _encode_image_uri(last_frame_path)
-        content.append({"type": "image_url", "image_url": {"url": last_uri}})
-
-    content.append({"type": "text", "text": motion_prompt})
-
-    # Step 1: Create generation task
-    payload = {
-        "model": model,
-        "content": content,
-        "duration": max(5, min(duration, 10)),
-        "ratio": aspect_ratio,
-        "resolution": resolution,
-        "watermark": False,
-    }
-
-    resp = requests.post(
-        f"{ARK_API_BASE}/contents/generations/tasks",
-        headers=headers,
-        json=payload,
-        timeout=30,
+    return generate_video_clip(
+        image_path=image_path,
+        motion_prompt=motion_prompt,
+        output_path=output_path,
+        duration=duration,
+        aspect_ratio=aspect_ratio,
+        last_frame_path=last_frame_path,
+        model_id=model_id,
     )
-    if resp.status_code not in (200, 201):
-        return {"status": "error", "message": f"Seedance API error {resp.status_code}: {resp.text}"}
-
-    task_id = resp.json().get("id")
-    if not task_id:
-        return {"status": "error", "message": f"No task ID returned: {resp.text}"}
-
-    # Step 2: Poll for completion (max ~5 min)
-    for _ in range(60):
-        time.sleep(5)
-        poll = requests.get(
-            f"{ARK_API_BASE}/contents/generations/tasks/{task_id}",
-            headers=headers,
-            timeout=15,
-        )
-        if poll.status_code != 200:
-            continue
-
-        data = poll.json()
-        status = data.get("status")
-
-        if status == "succeeded":
-            video_url = (data.get("output") or {}).get("video_url")
-            if video_url:
-                video_resp = requests.get(video_url, timeout=60)
-                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                Path(output_path).write_bytes(video_resp.content)
-                return {
-                    "status": "success",
-                    "video_path": output_path,
-                    "engine": "seedance",
-                    "model": model,
-                    "task_id": task_id,
-                }
-        elif status == "failed":
-            error = data.get("error") or data.get("failure") or "unknown"
-            return {"status": "error", "message": f"Seedance generation failed: {error}"}
-
-    return {"status": "error", "message": "Timeout waiting for Seedance video generation"}
-
-
-# ---------------------------------------------------------------------------
-# Fallback: Runway Gen-4 Turbo
-# ---------------------------------------------------------------------------
-
-def generate_runway_clip(
-    image_path: str,
-    motion_prompt: str,
-    duration: int = 5,
-    output_path: str = None,
-    model: str = "gen4_turbo",
-    aspect_ratio: str = "9:16",
-) -> dict:
-    """
-    Fallback: Generate a video clip from a photo using Runway Gen-4.
-    """
-    api_key = os.environ.get("RUNWAY_API_KEY")
-    if not api_key:
-        return {"status": "error", "message": "RUNWAY_API_KEY not set"}
-
-    if not output_path:
-        output_path = str(Path(image_path).with_suffix(".mp4"))
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "X-Runway-Version": "2024-11-06",
-    }
-
-    with open(image_path, "rb") as f:
-        image_b64 = base64.standard_b64encode(f.read()).decode()
-
-    ext = Path(image_path).suffix.lower().lstrip(".")
-    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-    media_type = mime.get(ext, "image/jpeg")
-    image_uri = f"data:{media_type};base64,{image_b64}"
-
-    payload = {
-        "model": model,
-        "promptImage": image_uri,
-        "promptText": motion_prompt,
-        "duration": duration,
-        "ratio": aspect_ratio,
-    }
-
-    resp = requests.post(f"{RUNWAY_API_BASE}/image_to_video", headers=headers, json=payload)
-    if resp.status_code != 200:
-        return {"status": "error", "message": f"Runway API error {resp.status_code}: {resp.text}"}
-
-    task_id = resp.json().get("id")
-    if not task_id:
-        return {"status": "error", "message": "No task ID returned"}
-
-    credits_per_sec = {"gen4_turbo": 5, "gen4": 12, "gen4_aleph": 15}.get(model, 5)
-
-    for _ in range(60):
-        time.sleep(5)
-        poll = requests.get(f"{RUNWAY_API_BASE}/tasks/{task_id}", headers=headers)
-        if poll.status_code != 200:
-            continue
-
-        data = poll.json()
-        status = data.get("status")
-
-        if status == "SUCCEEDED":
-            video_url = data.get("output", [None])[0]
-            if video_url:
-                video_resp = requests.get(video_url)
-                Path(output_path).write_bytes(video_resp.content)
-                return {
-                    "status": "success",
-                    "video_path": output_path,
-                    "engine": "runway",
-                    "cost_credits": credits_per_sec * duration,
-                    "cost_usd": credits_per_sec * duration * 0.01,
-                }
-        elif status == "FAILED":
-            return {"status": "error", "message": f"Runway failed: {data.get('failure', 'unknown')}"}
-
-    return {"status": "error", "message": "Timeout waiting for Runway video generation"}
 
 
 # ---------------------------------------------------------------------------
@@ -338,14 +162,14 @@ def build_motion_prompt(room_type: str, highlights: list, style: str = "cinemati
     elif style == "modern":
         prompt += ", clean minimalist aesthetic, cool neutral tones, crisp lines"
 
-    # Quality anchors (important for Seedance prompt adherence)
+    # Quality anchors
     prompt += ", photorealistic, high quality, cinematic color grading, no artifacts, no distortion"
 
     return prompt
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator: generate all clips (Seedance primary → Runway fallback)
+# Orchestrator: generate all clips (IMA primary → Ken Burns fallback)
 # ---------------------------------------------------------------------------
 
 def generate_all_clips(
@@ -359,9 +183,9 @@ def generate_all_clips(
     """
     Generate all AI video clips defined in the storyboard.
 
-    Pipeline: Seedance 1.0 Pro (primary) → Runway Gen-4 Turbo (fallback).
+    Pipeline: IMA Studio (primary) → Ken Burns slideshow (fallback).
     """
-    from job_logger import get_logger, log_step_start, log_step_end, log_clip_result
+    from job_logger import get_logger, log_clip_result, log_step_end, log_step_start
 
     logger = get_logger()
     os.makedirs(output_dir, exist_ok=True)
@@ -374,6 +198,7 @@ def generate_all_clips(
         "total_clips": total,
         "aspect_ratio": aspect_ratio,
         "style": style,
+        "engine": "ima",
     })
 
     for i, clip in enumerate(ai_clips, 1):
@@ -398,8 +223,8 @@ def generate_all_clips(
             i, total, clip.get("room_type", "?"), duration, motion_prompt,
         )
 
-        # Primary: Seedance
-        result = generate_seedance_clip(
+        # Primary: IMA Studio
+        result = generate_ima_clip(
             image_path=photo_path,
             motion_prompt=motion_prompt,
             duration=duration,
@@ -407,18 +232,25 @@ def generate_all_clips(
             aspect_ratio=aspect_ratio,
         )
 
-        # Fallback: Runway
+        # Fallback: Ken Burns slideshow (local ffmpeg, no API needed)
         if result["status"] == "error":
-            logger.warning("Seedance failed for clip %d: %s", i, result["message"])
+            logger.warning("IMA failed for clip %d: %s", i, result["message"])
             if progress_callback:
-                progress_callback(f"Seedance failed ({result['message']}), trying Runway fallback...")
-            result = generate_runway_clip(
+                progress_callback("Using Ken Burns slideshow fallback...")
+            from render_slideshow import create_ken_burns_clip
+
+            motions = ["slow_push", "pull_back", "slide_left", "slide_right"]
+            motion = motions[(i - 1) % len(motions)]
+            resolution = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+            result = create_ken_burns_clip(
                 image_path=photo_path,
-                motion_prompt=motion_prompt,
-                duration=duration,
                 output_path=output_path,
-                aspect_ratio=aspect_ratio,
+                duration=float(duration),
+                motion=motion,
+                resolution=resolution,
             )
+            if result.get("status") == "success":
+                result["engine"] = "ken_burns"
 
         result["sequence"] = clip["sequence"]
         results.append(result)
@@ -468,17 +300,22 @@ def generate_all_clips_v2(
     Returns:
         List of result dicts per clip
     """
-    from job_logger import get_logger, log_step_start, log_step_end, log_clip_result
+    import video_diagnostics
+    from job_logger import get_logger, log_clip_result, log_step_end, log_step_start
 
     logger = get_logger()
     os.makedirs(output_dir, exist_ok=True)
     results = []
     total = len(scene_plan)
+    job_dir = str(Path(output_dir).parent)
+
+    video_diagnostics.record_scene_plan(job_dir, scene_plan)
 
     log_step_start("ai_video_generation_v2", {
         "total_scenes": total,
         "aspect_ratio": aspect_ratio,
         "mode": "first+last_frame",
+        "engine": "ima",
     })
 
     for i, scene in enumerate(scene_plan, 1):
@@ -499,20 +336,22 @@ def generate_all_clips_v2(
             room_type="other", highlights=[], style="cinematic",
         )
 
-        # Estimate duration from narration (~3.5 words/sec), clamp to 5-10s
+        # Estimate duration from narration (~3.5 words/sec), clamp to 4-5s
+        # Hard cap at 5s: 6 scenes × 5s = 30s, fitting Reels sweet spot
         if narration:
             word_count = len(narration.split())
-            estimated_dur = max(5, min(int(word_count / 3.5) + 1, 10))
+            estimated_dur = max(4, min(int(word_count / 3.5) + 1, 5))
         else:
-            estimated_dur = 5
+            estimated_dur = 4
+        attempts = []
 
         logger.debug(
             "Scene %d/%d: first=%s  last=%s  dur=%ds  prompt=%.80s...",
             i, total, first_frame, last_frame, estimated_dur, motion_prompt,
         )
 
-        # Primary: Seedance with first+last frame
-        result = generate_seedance_clip(
+        # Primary: IMA Studio with first+last frame
+        result = generate_ima_clip(
             image_path=first_path,
             motion_prompt=motion_prompt,
             duration=estimated_dur,
@@ -520,23 +359,57 @@ def generate_all_clips_v2(
             last_frame_path=last_path,
             aspect_ratio=aspect_ratio,
         )
+        attempts.append(video_diagnostics.build_attempt_record(
+            engine="ima",
+            status=result.get("status", "error"),
+            result=result,
+            requested_duration=estimated_dur,
+            aspect_ratio=aspect_ratio,
+            first_frame=first_frame,
+            last_frame=last_frame,
+        ))
 
-        # Fallback: Runway (single frame only)
+        # Fallback: Ken Burns slideshow (local ffmpeg, no API needed)
         if result["status"] == "error":
-            logger.warning("Seedance failed for scene %d: %s", i, result["message"])
+            logger.warning("IMA failed for scene %d: %s", i, result["message"])
             if progress_callback:
-                progress_callback(f"Seedance failed, trying Runway fallback...")
-            result = generate_runway_clip(
+                progress_callback("Using Ken Burns slideshow fallback...")
+            from render_slideshow import create_ken_burns_clip
+
+            motions = ["slow_push", "pull_back", "slide_left", "slide_right"]
+            motion = motions[(i - 1) % len(motions)]
+            resolution = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+            result = create_ken_burns_clip(
                 image_path=first_path,
-                motion_prompt=motion_prompt,
-                duration=estimated_dur,
                 output_path=output_path,
-                aspect_ratio=aspect_ratio,
+                duration=float(estimated_dur),
+                motion=motion,
+                resolution=resolution,
             )
+            if result.get("status") == "success":
+                result["engine"] = "ken_burns"
+                logger.info("  Ken Burns fallback succeeded for scene %d", i)
+            attempts.append(video_diagnostics.build_attempt_record(
+                engine="ken_burns",
+                status=result.get("status", "error"),
+                result=result,
+                requested_duration=estimated_dur,
+                aspect_ratio=aspect_ratio,
+                first_frame=first_frame,
+                last_frame=last_frame,
+            ))
 
         result["sequence"] = seq
+        result["attempts"] = attempts
         results.append(result)
         log_clip_result(i, total, result)
+        video_diagnostics.record_render_diagnostics(
+            job_dir=job_dir,
+            sequence=seq,
+            requested_duration=estimated_dur,
+            attempts=attempts,
+            final_result=result,
+        )
 
     succeeded = sum(1 for r in results if r.get("status") == "success")
     log_step_end("ai_video_generation_v2", {
@@ -557,7 +430,7 @@ if __name__ == "__main__":
         print("Usage: render_ai_video.py <image_path> <motion_prompt> [duration] [output_path]")
         sys.exit(1)
 
-    result = generate_seedance_clip(
+    result = generate_ima_clip(
         image_path=sys.argv[1],
         motion_prompt=sys.argv[2],
         duration=int(sys.argv[3]) if len(sys.argv) > 3 else 5,

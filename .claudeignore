@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output (large binary files)
+skills/listing-video/output/
+skills/listing-video/assets/music/
+skills/listing-video/assets/fonts/
+
+# Database
+db/*.db
+
+# Secrets
+.env
+
+# Logs
+*.log
+*.jsonl
+
+# Temp
+*.tmp
+*.bak

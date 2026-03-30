@@ -11,21 +11,21 @@ Send listing photos → Get a ready-to-post marketing video with AI-generated ci
 ## How It Works
 
 ```
-Photos → Vision Analysis → Smart Questions → Storyboard → 
+Photos → Vision Analysis → Smart Questions → Storyboard →
 AI Video + Slideshow + Voiceover + Music → Final Video (vertical + horizontal)
 ```
 
 ## Tech Stack
 
-| Component | Tool | Cost/video |
-|-----------|------|-----------|
-| Photo Analysis | Claude Sonnet (Vision) | $0.02 |
-| Voiceover Script | Claude Sonnet | $0.01 |
-| AI Video Clips | Runway Gen-4 Turbo | $0.75 |
-| TTS Voiceover | ElevenLabs v2 | $0.12 |
-| Photo Effects | ffmpeg (local) | $0.00 |
-| Final Assembly | ffmpeg (local) | $0.00 |
-| **Total** | | **~$0.90** |
+| Component        | Tool                   | Cost/video |
+| ---------------- | ---------------------- | ---------- |
+| Photo Analysis   | Claude Sonnet (Vision) | $0.02      |
+| Voiceover Script | Claude Sonnet          | $0.01      |
+| AI Video Clips   | Runway Gen-4 Turbo     | $0.75      |
+| TTS Voiceover    | ElevenLabs v2          | $0.12      |
+| Photo Effects    | ffmpeg (local)         | $0.00      |
+| Final Assembly   | ffmpeg (local)         | $0.00      |
+| **Total**        |                        | **~$0.90** |
 
 ## Required API Keys
 

@@ -9,10 +9,10 @@
       "cta": 5
     },
     "transitions": {
-      "into_ai_clip": {"type": "crossfade", "duration": 0.8},
-      "out_of_ai_clip": {"type": "crossfade", "duration": 0.8},
-      "between_slides": {"type": "crossfade", "duration": 0.6},
-      "into_cta": {"type": "fade_black", "duration": 1.0}
+      "into_ai_clip": { "type": "crossfade", "duration": 0.8 },
+      "out_of_ai_clip": { "type": "crossfade", "duration": 0.8 },
+      "between_slides": { "type": "crossfade", "duration": 0.6 },
+      "into_cta": { "type": "fade_black", "duration": 1.0 }
     },
     "ken_burns": {
       "zoom_range": [1.0, 1.1],
@@ -33,7 +33,7 @@
   "music": {
     "style": "piano_ambient",
     "bpm_range": [60, 90],
-    "volume": 0.10,
+    "volume": 0.1,
     "fade_in": 1.0,
     "fade_out": 2.5,
     "duck_under_voice": true

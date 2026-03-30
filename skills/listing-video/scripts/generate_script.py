@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 """
 Listing Video Agent — Voiceover Script Generator
+
 Generates walk-through style voiceover scripts for listing videos.
+Uses Structured Outputs (Pydantic) for reliable, schema-enforced parsing.
 """
 
 import json
 import sys
 from pathlib import Path
 
+import anthropic
+from dotenv import load_dotenv
+from pydantic import BaseModel
+
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
+
 SCRIPT_PROMPT = (Path(__file__).parent.parent / "prompts" / "voiceover_script.md").read_text()
+
+
+class ScriptOutput(BaseModel):
+    """Structured output schema for voiceover script generation."""
+
+    hook: str
+    walkthrough: str
+    closer: str
+    caption: str
+    photo_sequence: list[int]
 
 
 def build_script_request(
@@ -26,9 +44,9 @@ def build_script_request(
 ) -> dict:
     """
     Build a Claude API request for voiceover script generation.
-    
+
     Returns:
-        API request dict
+        API request dict (pass to client.messages.parse() with output_format=ScriptOutput)
     """
     prompt = SCRIPT_PROMPT.format(
         city=city or extract_city(address),
@@ -45,7 +63,7 @@ def build_script_request(
     )
 
     return {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "max_tokens": 2048,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -59,72 +77,19 @@ def extract_city(address: str) -> str:
     return "your area"
 
 
-def parse_script_response(response_text: str) -> dict:
-    """
-    Parse the generated script into structured segments.
-    
-    Returns:
-        {
-            "hook": str,
-            "walkthrough": str,
-            "closer": str,
-            "full_script": str,
-            "caption": str,
-            "word_count": int,
-            "estimated_duration": float,
-            "photo_sequence": list[int]
-        }
-    """
-    sections = {"hook": "", "walkthrough": "", "closer": ""}
-    current = None
-    caption = ""
-    photo_sequence = []
-    
-    for line in response_text.split("\n"):
-        line_stripped = line.strip()
-        
-        if "[HOOK]" in line_stripped:
-            current = "hook"
-            continue
-        elif "[WALK-THROUGH]" in line_stripped:
-            current = "walkthrough"
-            continue
-        elif "[CLOSER]" in line_stripped:
-            current = "closer"
-            continue
-        elif line_stripped.startswith("CAPTION:"):
-            caption = line_stripped.replace("CAPTION:", "").strip()
-            current = None
-            continue
-        elif line_stripped.startswith("PHOTO SEQUENCE:"):
-            try:
-                seq_str = line_stripped.replace("PHOTO SEQUENCE:", "").strip()
-                photo_sequence = json.loads(seq_str)
-            except (json.JSONDecodeError, ValueError):
-                pass
-            continue
-        elif line_stripped.startswith("→ matches:"):
-            continue
-        
-        if current and line_stripped:
-            sections[current] += line_stripped + " "
-    
-    # Clean up
-    for k in sections:
-        sections[k] = sections[k].strip()
-    
-    full = f"{sections['hook']} {sections['walkthrough']} {sections['closer']}".strip()
+def _to_script_dict(parsed: ScriptOutput) -> dict:
+    """Convert a ScriptOutput Pydantic instance to the pipeline script dict format."""
+    full = f"{parsed.hook} {parsed.walkthrough} {parsed.closer}".strip()
     word_count = len(full.split())
-    
     return {
-        "hook": sections["hook"],
-        "walkthrough": sections["walkthrough"],
-        "closer": sections["closer"],
+        "hook": parsed.hook,
+        "walkthrough": parsed.walkthrough,
+        "closer": parsed.closer,
         "full_script": full,
-        "caption": caption,
+        "caption": parsed.caption,
         "word_count": word_count,
-        "estimated_duration": word_count / 3.5,  # ~3.5 words per second for natural speech
-        "photo_sequence": photo_sequence,
+        "estimated_duration": word_count / 3.5,  # ~3.5 words/second natural speech
+        "photo_sequence": parsed.photo_sequence,
     }
 
 
@@ -132,37 +97,71 @@ def validate_script(parsed: dict) -> list[str]:
     """Check script quality against rules. Returns list of issues."""
     issues = []
     wc = parsed["word_count"]
-    
+
     if wc < 80:
         issues.append(f"Too short ({wc} words, min 100)")
     if wc > 150:
         issues.append(f"Too long ({wc} words, max 130)")
-    
+
     hook = parsed["hook"].lower()
     bad_openings = ["hey guys", "welcome to", "check out this beautiful", "hello everyone"]
     for bad in bad_openings:
         if hook.startswith(bad):
             issues.append(f"Bad opening: starts with '{bad}'")
-    
+
     full = parsed["full_script"].lower()
     cliches = ["stunning home", "beautiful property", "boasts", "nestled in"]
     for c in cliches:
         if c in full:
             issues.append(f"Cliché detected: '{c}'")
-    
+
     opinion_markers = ["sold me", "honest", "here's the thing", "what got me", "i'll tell you"]
     if not any(m in full for m in opinion_markers):
         issues.append("Missing personal opinion (add 'what sold me' or similar)")
-    
+
     return issues
 
 
+def run(
+    photo_analysis: dict,
+    address: str,
+    price: str,
+    **kwargs,
+) -> dict:
+    """
+    Run script generation end-to-end using Structured Outputs.
+
+    Calls Claude with output_format=ScriptOutput to guarantee valid JSON.
+    No fragile text parsing — schema is enforced by the API.
+
+    Returns:
+        Script dict with hook/walkthrough/closer/full_script/caption/word_count/
+        estimated_duration/photo_sequence, plus optional validation_issues.
+    """
+    request = build_script_request(photo_analysis, address, price, **kwargs)
+    client = anthropic.Anthropic()
+    response = client.messages.parse(**request, output_format=ScriptOutput)
+    result = _to_script_dict(response.parsed_output)
+    issues = validate_script(result)
+    if issues:
+        result["validation_issues"] = issues
+    return result
+
+
 if __name__ == "__main__":
-    # Test with sample input
     sample = {
+        "photo_analysis": {"photos": [], "property_summary": {}},
         "address": "123 Oak St, Frisco, TX",
         "price": "$625,000",
-        "photo_analysis": {"photos": [], "property_summary": {}},
     }
-    request = build_script_request(**sample)
-    print(json.dumps(request, indent=2))
+    if "--dry-run" in sys.argv:
+        request = build_script_request(**sample)
+        print(json.dumps(request, indent=2))
+    else:
+        result = run(**sample)
+        print(f"📝 Script ({result['word_count']} words, ~{result['estimated_duration']:.0f}s):\n")
+        print(f"[HOOK] {result['hook']}")
+        print(f"[WALK] {result['walkthrough']}")
+        print(f"[CLOSE] {result['closer']}")
+        if result.get("validation_issues"):
+            print(f"\n⚠️ Issues: {result['validation_issues']}")
