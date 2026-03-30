@@ -501,6 +501,9 @@ class Dispatcher:
             (not result.get("has_audio", True),
              "Final video has no audio stream",
              "warning"),
+            (result.get("overlay_requested") and not result.get("overlay_applied"),
+             "Text overlay requested (address/price/agent) but failed to burn — video has no subtitles",
+             "warning"),
         ], logger)
 
         # ── Step 6: Auto video review + quality gate ──────────────────

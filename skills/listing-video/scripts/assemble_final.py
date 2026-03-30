@@ -289,10 +289,26 @@ def add_audio_layers(
     elif music_path:
         music_idx = 1
         fade_out_st = max(0.0, video_duration - 2)
+        src_has_audio = check_has_audio(video_path)
+        if src_has_audio:
+            # Narration already baked into the video — mix with BGM at low volume
+            filter_complex = (
+                f"[0:a]apad=whole_dur={video_duration:.4f}[voice];"
+                f"[{music_idx}:a]volume={music_volume},atrim=0:{video_duration:.4f},"
+                f"apad=whole_dur={video_duration:.4f},"
+                f"afade=t=in:d=1,afade=t=out:st={fade_out_st:.4f}:d=2[music];"
+                f"[voice][music]amix=inputs=2:duration=longest[outa]"
+            )
+        else:
+            # No narration in video — use BGM only
+            filter_complex = (
+                f"[{music_idx}:a]volume={music_volume},"
+                f"afade=t=in:d=1,afade=t=out:st={fade_out_st:.4f}:d=2[outa]"
+            )
         cmd = [
             "ffmpeg", "-y",
             *inputs,
-            "-filter_complex", f"[{music_idx}:a]volume={music_volume},afade=t=in:d=1,afade=t=out:st={fade_out_st:.4f}:d=2[outa]",
+            "-filter_complex", filter_complex,
             "-map", "0:v",
             "-map", "[outa]",
             "-c:v", "copy",
@@ -450,6 +466,72 @@ def check_has_audio(file_path: str) -> bool:
         return False
     streams = json.loads(result.stdout).get("streams", [])
     return any(s.get("codec_type") == "audio" for s in streams)
+
+
+def _burn_subtitle_on_clip(
+    clip_path: str,
+    text: str,
+    output_path: str,
+    font_path: str = None,
+) -> bool:
+    """Burn subtitle text onto a clip using PIL PNG + ffmpeg overlay.
+
+    Renders text_narration as a subtitle strip at the bottom of the clip.
+    Returns True on success, False on any failure (non-fatal — clip used as-is).
+    """
+    import tempfile
+    import textwrap
+
+    if not text:
+        return False
+
+    # Probe clip dimensions
+    w, h = _probe_resolution(clip_path)
+    if w <= 0 or h <= 0:
+        w, h = 1080, 1920
+
+    # Word-wrap: ~32 chars per line at 1080px width
+    scale = w / 1080.0
+    chars_per_line = max(20, int(32 / scale * (w / 1080.0))) if scale > 0 else 32
+    lines = textwrap.wrap(text, width=chars_per_line)
+    if not lines:
+        return False
+
+    fontsize = max(28, int(38 * scale))
+    line_height = fontsize + 14
+    bottom_margin = max(60, int(80 * scale))
+    total_h = len(lines) * line_height
+    start_y = h - bottom_margin - total_h
+
+    texts = [
+        {"text": line, "y": start_y + i * line_height, "fontsize": fontsize}
+        for i, line in enumerate(lines)
+    ]
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        sub_png = f.name
+
+    try:
+        ok = _create_text_overlay_png(w, h, texts, sub_png, font_path)
+        if not ok:
+            return False
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", clip_path,
+            "-i", sub_png,
+            "-filter_complex", "[0:v][1:v]overlay=0:0[outv]",
+            "-map", "[outv]",
+            "-map", "0:a?" ,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            output_path,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.returncode == 0
+    finally:
+        if os.path.exists(sub_png):
+            os.remove(sub_png)
 
 
 def _create_text_overlay_png(
@@ -1018,6 +1100,15 @@ def full_assembly_v2(
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
+                # Burn subtitle text onto merged clip (non-fatal if it fails)
+                subtitle_text = scene.get("text_narration", "").strip()
+                if subtitle_text:
+                    sub_path = merged_path.replace(".mp4", "_sub.mp4")
+                    if _burn_subtitle_on_clip(merged_path, subtitle_text, sub_path, font_path):
+                        os.replace(sub_path, merged_path)
+                    elif os.path.exists(sub_path):
+                        os.remove(sub_path)
+
                 merged_dur = get_duration(merged_path)
                 logger.info("  Scene %02d: merged %.1fs  %s", seq, merged_dur, merged_path)
                 scene_clips_with_audio.append(merged_path)
@@ -1111,6 +1202,7 @@ def full_assembly_v2(
 
     # Step 5: Burn text overlays (address, price, agent CTA)
     has_any_overlay = any([address, price, agent_name, agent_phone])
+    overlay_applied = False
     if has_any_overlay:
         if progress_callback:
             progress_callback("Burning text overlays...")
@@ -1126,6 +1218,7 @@ def full_assembly_v2(
         )
         if overlay_result["status"] == "success":
             os.replace(overlay_path, format_result["video_path"])
+            overlay_applied = True
             logger.info("Text overlays burned: address=%s price=%s agent=%s", address, price, agent_name)
         else:
             logger.warning("Text overlay failed (non-fatal): %s", overlay_result.get("message"))
@@ -1159,6 +1252,8 @@ def full_assembly_v2(
         "has_audio": has_audio,
         "narrations_succeeded": len(narr_lookup),
         "audio_warning": None if has_audio else "No audio stream in final video — check TTS and music pipeline",
+        "overlay_requested": has_any_overlay,
+        "overlay_applied": overlay_applied,
     }
     video_diagnostics.record_final_diagnostics(output_dir, result)
     log_step_end("assembly_v2", result)
