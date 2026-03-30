@@ -3,14 +3,14 @@
 ## 一句话定位
 
 房产经纪人的 AI 社媒助手。经纪人发 listing 照片，自动生成营销短视频。
-WhatsApp 入口，OpenClaw 对话层，后台异步生产。
+WhatsApp / Telegram / iMessage 都可以作为入口，OpenClaw 负责对话层，后台异步生产。
 
 ## 架构
 
 ```
-经纪人 → WhatsApp → OpenClaw（对话层）→ Reel Agent 后台（生产层）→ 视频
-                                              ↓
-                                    Claude / IMA Studio / ElevenLabs / ffmpeg
+经纪人 → WhatsApp / Telegram / iMessage → OpenClaw（对话层）→ Reel Agent 后台（生产层）→ 视频
+                                                                  ↓
+                                                        Claude / IMA Studio / ElevenLabs / ffmpeg
 ```
 
 三层：对话层（OpenClaw agent）、编排层（orchestrator/ + agent/ + db/）、能力层（skills/listing-video/scripts/）
