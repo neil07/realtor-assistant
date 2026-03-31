@@ -659,8 +659,24 @@ _SKIP_KEYWORDS = {"skip", "pass", "跳过", "不用", "no"}
 _PUBLISH_KEYWORDS = {"publish", "post", "发布", "send", "发"}
 _ADJUST_KEYWORDS = {"adjust", "change", "tweak", "调整", "改", "修改"}
 _REDO_KEYWORDS = {"redo", "again", "remake", "重做", "重来"}
-_STOP_PUSH_KEYWORDS = {"stop", "unsubscribe", "no more", "停止推送", "不要了", "取消推送"}
-_START_PUSH_KEYWORDS = {"resume push", "start push", "恢复推送", "继续推", "重新订阅"}
+_STOP_PUSH_KEYWORDS = {
+    "stop push",
+    "pause push",
+    "unsubscribe",
+    "no more",
+    "停止推送",
+    "暂停推送",
+    "不要了",
+    "取消推送",
+}
+_START_PUSH_KEYWORDS = {
+    "resume push",
+    "start push",
+    "restart push",
+    "恢复推送",
+    "继续推",
+    "重新订阅",
+}
 _HELP_KEYWORDS = {"help", "?", "帮助", "怎么用", "what can you do"}
 _DAILY_INSIGHT_KEYWORDS = {
     "daily insight",
@@ -813,7 +829,7 @@ def _classify_intent(
         }
     if any(kw in t for kw in _START_PUSH_KEYWORDS):
         return {
-            "intent": "start_push",
+            "intent": "resume_push",
             "action": "enable_daily_push",
             "response": "Daily insights resumed! You'll get tomorrow's content at 8 AM 📬",
         }

@@ -4,21 +4,25 @@
 
 name: reel-agent-backend
 description: |
-Connect to Reel Agent backend for listing video generation,
-feedback-driven revision, agent profile lookup, daily content push,
-and universal text-command message routing.
-Trigger when: user sends any message (routed through /api/message first).
+  Connect to Reel Agent backend for universal message routing,
+  property-content kickoff, listing-video generation, revision feedback,
+  and daily insight push control.
+trigger: user sends any message; always route through /api/message first
 requires:
-env: - REEL_AGENT_URL - REEL_AGENT_TOKEN - AGENT_PHONE
-bins: - curl - jq
+  env:
+    - REEL_AGENT_URL
+    - REEL_AGENT_TOKEN
+    - AGENT_PHONE
+  bins:
+    - curl
+    - jq
 
 ---
 
 ## Skill 0: Route Message (ALWAYS call first)
 
 Every user message — text, photos, button taps — goes through this endpoint.
-It classifies intent and returns the action + response. This is what makes
-text-command fallback first-class on channels without buttons.
+It keeps routing thin: `/api/message` only classifies the lane and tells OpenClaw what to do next.
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/api/message" \
@@ -28,39 +32,34 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
     "agent_phone": "'"$AGENT_PHONE"'",
     "text": "'"$USER_TEXT"'",
     "has_media": '$HAS_MEDIA',
-    "media_paths": ['"$MEDIA_PATHS_JSON"'],
+    "media_paths": ['$MEDIA_PATHS_JSON'],
     "callback_url": "'"$OPENCLAW_GATEWAY_URL"'/api/sessions/main/messages"
   }'
 ```
 
-**Response:**
+**Graduation routing contract:**
 
-```json
-{
-  "intent": "listing_video",
-  "action": "start_video",
-  "response": "Got your photos! Using your elegant style... 🎬",
-  "text_commands": {
-    "next": "Confirm or change style",
-    "examples": ["go", "elegant"]
-  },
-  "has_profile": true,
-  "auto_generate": true
-}
-```
+| Input | New user | Returning user |
+| --- | --- | --- |
+| `help` | `first_contact` / `welcome` | `help` / `welcome` |
+| `what can you do?` | `first_contact` / `welcome` | `help` / `welcome` |
+| `daily insight` | `daily_insight` / `start_daily_insight` | `daily_insight` / `start_daily_insight` |
+| `123 Main St open house this Sunday 2pm` | `property_content` / `start_property_content` | `property_content` / `start_property_content` |
+| `stop push` | `stop_push` / `disable_daily_push` | `stop_push` / `disable_daily_push` |
+| `resume push` | `resume_push` / `enable_daily_push` | `resume_push` / `enable_daily_push` |
 
 **Decision tree:**
 
 - `action == "welcome"` → send `response` to user, done
 - `action == "start_video"` and `auto_generate == true` → call Skill 2 immediately
 - `action == "start_video"` and `awaiting == "style_selection"` → send `response`, wait for next message
-- `action == "start_daily_insight"` → send `response`, keep the request in the daily-insight lane, and hand off to the on-demand daily insight workflow when that OpenClaw integration is available
-- `action == "start_property_content"` → send `response`, keep the user in the property-content lane, and wait for photos or richer property assets before calling Skill 2
-- `action == "set_style"` → store style, ask for confirmation ("go" / "ok")
+- `action == "start_daily_insight"` → send `response`, keep the request in the daily-insight lane
+- `action == "start_property_content"` → send `response`, keep the user in the unified property-content lane and wait for photos or richer assets before calling Skill 2
+- `action == "set_style"` → store style, ask for confirmation (`go` / `ok`)
 - `action == "confirm_and_generate"` → call Skill 2
 - `action == "submit_feedback"` → call Skill 3
 - `action == "publish"` → send caption + hashtags from last delivery
-- `action == "redo"` → call Skill 2 with same photos
+- `action == "redo"` → call Skill 2 again with the same photos
 - `action == "disable_daily_push"` / `"enable_daily_push"` → call Skill 4
 - `action == "reject"` → send `response`, done
 
@@ -68,33 +67,20 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 
 ## Skill 1: Check Agent Profile
 
+Use only for explicit profile queries. Skill 0 already checks profile internally.
+
 ```bash
 curl -s -X GET "$REEL_AGENT_URL/api/profile/$AGENT_PHONE" \
   -H "Authorization: Bearer $REEL_AGENT_TOKEN"
 ```
 
-**Response (200):** Agent has a profile.
-
-```json
-{
-  "style": "elegant",
-  "music": "upbeat",
-  "language": "en",
-  "videos_created": 4
-}
-```
-
-→ If `style` is set, **skip style selection** — use stored preference.
-→ If 404, show style selection (buttons or text commands).
-
-> Note: Skill 0 already checks the profile internally. You only need this
-> for explicit profile queries (e.g., showing user their preferences).
+If `style` exists, OpenClaw may skip style selection on the asset-first video path.
 
 ---
 
 ## Skill 2: Start Video Generation
 
-Call after confirming parameters with user (or when `auto_generate` is true).
+Call after parameters are confirmed, or immediately when Skill 0 returns `auto_generate == true`.
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
@@ -102,7 +88,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_phone": "'"$AGENT_PHONE"'",
-    "photo_paths": ['"$PHOTO_PATHS_JSON"'],
+    "photo_paths": ['$PHOTO_PATHS_JSON'],
     "callback_url": "'"$OPENCLAW_GATEWAY_URL"'/api/sessions/main/messages",
     "openclaw_msg_id": "'"$MSG_ID"'",
     "params": {
@@ -117,16 +103,11 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   }'
 ```
 
-**Response:**
+**Important:**
 
-```json
-{ "job_id": "20260326_143022_a1b2c3", "status": "QUEUED" }
-```
-
-→ Store `job_id` in session memory as `last_job_id`.
-→ Tell user the response from Skill 0 (or: "Making your video... ~3 min 🎬")
-
-**Progress callbacks** arrive automatically at `callback_url`. Forward each to user.
+- Property-content text alone does **not** start generation
+- Generation begins only after OpenClaw has photos or richer property assets
+- Store returned `job_id` as `last_job_id`
 
 ---
 
@@ -146,18 +127,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
   }'
 ```
 
-**Response:**
-
-```json
-{
-  "job_id": "20260326_143022_a1b2c3-r1",
-  "re_run_from": "PRODUCING",
-  "classified": { "category": "music", "new_value": "upbeat" }
-}
-```
-
-→ Update `last_job_id` to new `job_id`.
-→ Tell user: "Got it! Only re-doing the music, keeping the script... ⚡"
+Update `last_job_id` if the backend returns a new revision job id.
 
 ---
 
@@ -176,22 +146,24 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   }'
 ```
 
+Swap `disable_daily_push` for `enable_daily_push` when handling `resume push`.
+
 ---
 
 ## Callback Format (Backend → OpenClaw)
 
-Backend sends progress + delivery updates to `callback_url`. Format:
+Backend sends progress + delivery updates to `callback_url`.
 
 ```json
-// Progress update
 {
   "type": "progress",
   "job_id": "...",
   "step": "scripting",
   "message": "Writing the voiceover script..."
 }
+```
 
-// Delivery — show with action buttons/text-commands
+```json
 {
   "type": "delivered",
   "job_id": "...",
@@ -200,8 +172,9 @@ Backend sends progress + delivery updates to `callback_url`. Format:
   "scene_count": 6,
   "aspect_ratio": "9:16"
 }
+```
 
-// Daily insight — show with publish/skip
+```json
 {
   "type": "daily_insight",
   "agent_phone": "+60175029017",
@@ -215,8 +188,9 @@ Backend sends progress + delivery updates to `callback_url`. Format:
     "feed_1080x1080": "https://..."
   }
 }
+```
 
-// Failure
+```json
 {
   "type": "failed",
   "job_id": "...",
@@ -224,8 +198,8 @@ Backend sends progress + delivery updates to `callback_url`. Format:
 }
 ```
 
-**Post-delivery UX (buttons OR text commands):**
+**Post-delivery UX:**
 
-- For `delivered`: "Happy with it? publish / adjust / redo"
-- For `daily_insight`: "Your daily content is ready! publish / skip"
-- For `failed`: "Hit an issue 🛠️ — resend photos to try again"
+- For `delivered`: `publish / adjust / redo`
+- For `daily_insight`: `publish / skip`
+- For `failed`: ask user to resend photos or retry later

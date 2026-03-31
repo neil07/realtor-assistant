@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from server import _classify_intent
@@ -12,28 +14,52 @@ RETURNING_PROFILE = {
 }
 
 
-def test_new_user_help_routes_to_welcome() -> None:
-    result = _classify_intent("help", False, None, None)
-    assert result["intent"] == "first_contact"
-    assert result["action"] == "welcome"
+@pytest.mark.parametrize(
+    ("text", "expected_intent", "expected_action"),
+    [
+        ("help", "first_contact", "welcome"),
+        ("what can you do?", "first_contact", "welcome"),
+        ("daily insight", "daily_insight", "start_daily_insight"),
+        (
+            "123 Main St open house this Sunday 2pm",
+            "property_content",
+            "start_property_content",
+        ),
+        ("stop push", "stop_push", "disable_daily_push"),
+        ("resume push", "resume_push", "enable_daily_push"),
+    ],
+)
+def test_new_user_routes_graduation_inputs(
+    text: str, expected_intent: str, expected_action: str
+) -> None:
+    result = _classify_intent(text, False, None, None)
+    assert result["intent"] == expected_intent
+    assert result["action"] == expected_action
 
 
-def test_returning_user_help_phrase_routes_to_help() -> None:
-    result = _classify_intent("what can you do?", False, RETURNING_PROFILE, None)
-    assert result["intent"] == "help"
-    assert result["action"] == "welcome"
-
-
-def test_new_user_daily_insight_still_routes_to_daily_insight() -> None:
-    result = _classify_intent("daily insight", False, None, None)
-    assert result["intent"] == "daily_insight"
-    assert result["action"] == "start_daily_insight"
-
-
-def test_new_user_property_text_routes_to_property_content() -> None:
-    result = _classify_intent("123 Main St open house this Sunday 2pm", False, None, None)
-    assert result["intent"] == "property_content"
-    assert result["action"] == "start_property_content"
+@pytest.mark.parametrize(
+    ("text", "expected_intent", "expected_action"),
+    [
+        ("help", "help", "welcome"),
+        ("what can you do?", "help", "welcome"),
+        ("daily insight", "daily_insight", "start_daily_insight"),
+        (
+            "123 Main St open house this Sunday 2pm",
+            "property_content",
+            "start_property_content",
+        ),
+        ("stop push", "stop_push", "disable_daily_push"),
+        ("resume push", "resume_push", "enable_daily_push"),
+    ],
+)
+def test_returning_user_routes_graduation_inputs(
+    text: str,
+    expected_intent: str,
+    expected_action: str,
+) -> None:
+    result = _classify_intent(text, False, RETURNING_PROFILE, None)
+    assert result["intent"] == expected_intent
+    assert result["action"] == expected_action
 
 
 def test_returning_user_daily_insight_beats_revision_context() -> None:

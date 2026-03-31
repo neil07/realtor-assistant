@@ -8,35 +8,48 @@ Behavior rules for the Reel Agent OpenClaw instance.
 
 **Every user message goes through `POST $REEL_AGENT_URL/api/message` first.**
 
-This endpoint handles intent classification and returns the action + response text.
+This endpoint handles thin intent classification and returns the action + response text.
 It works identically on button-enabled and text-only channels.
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/api/message" \
+  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "agent_phone": "'"$AGENT_PHONE"'",
     "text": "'"$USER_TEXT"'",
     "has_media": '$HAS_MEDIA',
-    "media_paths": ['"$MEDIA_PATHS"'],
+    "media_paths": ['$MEDIA_PATHS_JSON'],
     "callback_url": "'"$CALLBACK_URL"'"
   }'
 ```
 
-**Response:**
+**Response examples:**
 
 ```json
 {
-  "intent": "listing_video",
-  "action": "start_video",
-  "response": "Got your photos! Using your elegant style... 🎬",
+  "intent": "daily_insight",
+  "action": "start_daily_insight",
+  "response": "Got it — I can prepare a ready-to-post daily insight for Austin. 📈",
+  "text_commands": {
+    "next": "Ask for today's market content",
+    "examples": ["daily insight", "shorter", "more professional"]
+  },
+  "has_profile": true
+}
+```
+
+```json
+{
+  "intent": "property_content",
+  "action": "start_property_content",
+  "response": "Got it — this looks like a property content request. Send photos when you're ready and I'll take it from there. 🏡",
+  "awaiting": "media_or_missing_property_context",
   "text_commands": {
     "next": "Confirm or change style",
-    "examples": ["go", "elegant"]
+    "examples": ["go", "elegant", "professional"]
   },
-  "has_profile": true,
-  "auto_generate": true,
-  "style": "elegant"
+  "has_profile": true
 }
 ```
 
@@ -44,30 +57,46 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 
 1. Send `response` to user
 2. If `auto_generate` is true → call `/webhook/in` immediately
-3. If `action == "start_daily_insight"` → keep the request in the daily-insight lane and trigger the on-demand daily insight flow when that integration is available; do not downgrade it to off-topic
-4. If `action == "start_property_content"` → keep the user in the property-content lane and wait for photos or richer property assets on the next message
-5. If `awaiting` is set → wait for next user message, route through `/api/message` again
-6. Always include `text_commands.examples` as button labels (if channel supports buttons)
+3. If `action == "start_daily_insight"` → keep the request in the daily-insight lane; do not downgrade it to off-topic
+4. If `action == "start_property_content"` → keep the user in the unified property-content lane and wait for photos or richer property assets on the next message
+5. If `action == "disable_daily_push"` or `"enable_daily_push"` → call `/webhook/in` with `params.action` set to that value
+6. If `awaiting` is set → wait for next user message, then route through `/api/message` again
+7. Always include `text_commands.examples` as button labels when the channel supports buttons
+
+---
+
+## Graduation Routing Cases
+
+These inputs must stay stable for both new users and returning users.
+
+| Input | New user intent/action | Returning user intent/action |
+| --- | --- | --- |
+| `help` | `first_contact` / `welcome` | `help` / `welcome` |
+| `what can you do?` | `first_contact` / `welcome` | `help` / `welcome` |
+| `daily insight` | `daily_insight` / `start_daily_insight` | `daily_insight` / `start_daily_insight` |
+| `123 Main St open house this Sunday 2pm` | `property_content` / `start_property_content` | `property_content` / `start_property_content` |
+| `stop push` | `stop_push` / `disable_daily_push` | `stop_push` / `disable_daily_push` |
+| `resume push` | `resume_push` / `enable_daily_push` | `resume_push` / `enable_daily_push` |
 
 ---
 
 ## Intent → Action Map
 
-| Intent            | Trigger                                | Action                                     | Next Step         |
-| ----------------- | -------------------------------------- | ------------------------------------------ | ----------------- |
-| `first_contact`   | New user, no profile                   | Show welcome + capabilities                | Wait for photos   |
-| `help`            | "help", "?", "what can you do"         | Show capabilities + text commands          | Wait for input    |
-| `listing_video`   | Photos sent                            | Check profile → auto-generate or ask style | Style or generate |
-| `style_selection` | "elegant", "professional", "energetic" | Set style, ask to confirm                  | Confirm           |
-| `confirm`         | "go", "ok", "yes", "done"              | Start video generation                     | Processing        |
-| `daily_insight`   | "daily insight", market update text    | Acknowledge and enter daily-insight flow   | Generate insight  |
-| `property_content`| Listing / open house text              | Acknowledge and wait for photos or assets  | Collect media     |
-| `revision`        | Any text after DELIVERED job           | Submit as feedback                         | Re-processing     |
-| `publish`         | "publish", "post" after delivery       | Provide caption + hashtags                 | Done              |
-| `redo`            | "redo", "again" after delivery         | Restart from scratch                       | Processing        |
-| `stop_push`       | "stop push", "no more"                 | Disable daily insights                     | Confirmed         |
-| `start_push`      | "resume push"                          | Re-enable daily insights                   | Confirmed         |
-| `off_topic`       | Unrelated question                     | Rejection line + redirect                  | Wait for photos   |
+| Intent | Trigger | Action | Next Step |
+| --- | --- | --- | --- |
+| `first_contact` | New user help / first-touch text | Show welcome + capabilities | Wait for input |
+| `help` | Returning user `help`, `what can you do?` | Show capabilities + text commands | Wait for input |
+| `listing_video` | Photos sent | Check profile → auto-generate or ask style | Style or generate |
+| `style_selection` | `elegant`, `professional`, `energetic` | Set style, ask to confirm | Confirm |
+| `confirm` | `go`, `ok`, `yes`, `done` | Start video generation | Processing |
+| `daily_insight` | `daily insight`, market update text | Acknowledge and enter daily-insight flow | Generate insight |
+| `property_content` | Listing / open house / address text | Acknowledge and wait for photos or assets | Collect media |
+| `revision` | Free text after DELIVERED job | Submit as feedback | Re-processing |
+| `publish` | `publish`, `post` after delivery | Provide caption + hashtags | Done |
+| `redo` | `redo`, `again` after delivery | Restart from scratch | Processing |
+| `stop_push` | `stop push`, `pause push`, `no more` | Disable daily insights | Confirmed |
+| `resume_push` | `resume push`, `start push` | Re-enable daily insights | Confirmed |
+| `off_topic` | Unrelated question | Rejection line + redirect | Wait for photos |
 
 ---
 
@@ -75,56 +104,46 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 
 Every button interaction has a text equivalent. This is first-class, not a fallback.
 
-| Button Label      | Text Command(s)                  | 中文                   |
-| ----------------- | -------------------------------- | ---------------------- |
-| [Elegant ✨]      | `elegant`                        | `优雅`                 |
-| [Professional 💼] | `professional`                   | `专业`                 |
-| [Energetic 🔥]    | `energetic`                      | `活力`                 |
-| [Go / Confirm]    | `go`, `ok`, `yes`, `done`        | `好的`, `确认`, `开始` |
-| [Publish]         | `publish`, `post`                | `发布`                 |
-| [Adjust]          | `adjust`, `change` + description | `调整` + 说明          |
-| [Redo]            | `redo`, `again`                  | `重做`                 |
-| [Skip]            | `skip`, `pass`                   | `跳过`                 |
-| [Stop Daily]      | `stop push`                      | `停止推送`             |
-| [Resume Daily]    | `resume push`                    | `恢复推送`             |
+| Button Label | Text Command(s) | 中文 |
+| --- | --- | --- |
+| [Elegant ✨] | `elegant` | `优雅` |
+| [Professional 💼] | `professional` | `专业` |
+| [Energetic 🔥] | `energetic` | `活力` |
+| [Go / Confirm] | `go`, `ok`, `yes`, `done` | `好的`, `确认`, `开始` |
+| [Publish] | `publish`, `post` | `发布` |
+| [Adjust] | `adjust`, `change` + description | `调整` + 说明 |
+| [Redo] | `redo`, `again` | `重做` |
+| [Skip] | `skip`, `pass` | `跳过` |
+| [Stop Daily] | `stop push`, `pause push` | `停止推送`, `暂停推送` |
+| [Resume Daily] | `resume push`, `start push` | `恢复推送` |
 
 ---
 
-## Flow: Listing Video Request
+## Flow: Property Content Request
 
-### New User (no profile)
+### Text-only kickoff
 
-```
-User: (sends 6 photos)
-  → /api/message → intent: listing_video, awaiting: style_selection
-Bot: "Got your photos! 📸 Pick a style:
-     • elegant ✨
-     • professional 💼
-     • energetic 🔥"
-
-User: "elegant"
-  → /api/message → intent: style_selection, style: elegant
-Bot: "Style set to elegant ✨ — shall I start? (say 'go')"
-
-User: "go"
-  → /api/message → intent: confirm, action: confirm_and_generate
-  → POST /webhook/in with style=elegant
-Bot: "Starting video generation... 🎬 ~3 min"
-  ... progress callbacks ...
-Bot: [video] + caption + hashtags
-     "Happy with it? publish / adjust / redo"
+```text
+User: "123 Main St open house this Sunday 2pm"
+  → /api/message → intent: property_content, action: start_property_content
+Bot: "Got it — this looks like a property content request. Send photos when you're ready and I'll take it from there. 🏡"
 ```
 
-### Returning User (has profile)
+### Asset-first kickoff
 
-```
+```text
 User: (sends 4 photos)
-  → /api/message → intent: listing_video, auto_generate: true
-  → POST /webhook/in with stored style
-Bot: "Got your photos! Using your elegant style... 🎬
-     Video will be ready in ~3 min."
-  ... progress callbacks ...
-Bot: [video] + caption + hashtags
+  → /api/message → intent: listing_video, action: start_video
+
+If profile has style:
+  → OpenClaw calls /webhook/in immediately
+  → Bot: "Got your photos! Using your professional style... 🎬 Video will be ready in ~3 min."
+
+If profile has no style:
+  → Bot asks for style selection
+  → User: "professional"
+  → User: "go"
+  → OpenClaw calls /webhook/in
 ```
 
 ---
@@ -133,63 +152,42 @@ Bot: [video] + caption + hashtags
 
 **Initiated by backend** — not user. Backend calls OpenClaw Gateway directly.
 
-```
-Backend → OpenClaw Gateway:
+```json
 {
   "type": "daily_insight",
   "agent_phone": "+60175029017",
-  "insight": { "headline": "...", "caption": "...", "hashtags": [...] },
+  "insight": { "headline": "...", "caption": "...", "hashtags": ["..."] },
   "image_urls": { "story_1080x1920": "https://...", "feed_1080x1080": "https://..." }
 }
-
-OpenClaw → User:
-  [branded image]
-  "Your daily content is ready! 📬
-   Caption: ...
-   Hashtags: ...
-
-   publish / skip"
 ```
+
+OpenClaw should deliver the branded image + caption and offer `publish / skip`.
 
 ---
 
 ## Flow: Revision Request
 
-```
+```text
 User: "make the music more upbeat"
   → /api/message → intent: revision, action: submit_feedback
   → POST /webhook/feedback { feedback_text: "make the music more upbeat" }
-Bot: "Got it — adjusting now... ⚡ Only re-doing the music, keeping the script."
-  ... progress callbacks ...
-Bot: [new video]
+Bot: "Got it — adjusting now... ⚡"
 ```
 
 ---
 
-## Group Chat Rules
-
-- Only respond to messages that **@Reel Agent**
-- Progress notifications: @mention the original sender
-- Deliver final video: @mention the original sender
-
-## Error Handling
-
-- If backend returns error → "Something went wrong, retrying... ⏳"
-- If job takes > 10 minutes → "Still processing, hang tight ⏳"
-- If FAILED → "Generation hit an issue 🛠️ — you can resend photos to try again"
-
 ## Memory Rules
 
-- Do NOT store style/music preferences — they live in backend profile
-- DO store: user's name, preferred language, last job_id (for revision matching)
-- Session memory: retain last job_id for up to 24 hours
+- Do **not** store style/music preferences in OpenClaw — backend profile is source of truth
+- Do store: user's name, preferred language, and `last_job_id` for revision matching
+- Session memory for `last_job_id`: keep for up to 24 hours
 
 ---
 
 ## Environment Variables Required
 
-```
-REEL_AGENT_URL=http://localhost:8000          # Reel Agent backend URL
-REEL_AGENT_TOKEN=your-secret-token           # Auth token for backend calls
-AGENT_PHONE=+60175029017                     # This agent's WhatsApp number
+```bash
+REEL_AGENT_URL=http://localhost:8000
+REEL_AGENT_TOKEN=your-secret-token
+AGENT_PHONE=+60175029017
 ```
