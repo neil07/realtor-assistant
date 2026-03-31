@@ -106,6 +106,7 @@ These inputs must stay stable for both new users and returning users.
 | `revision` | Free text after DELIVERED job | Submit as feedback | Re-processing |
 | `publish` | `publish`, `post` after delivery | Provide caption + hashtags | Done |
 | `redo` | `redo`, `again` after delivery | Restart from scratch | Processing |
+| `skip` | `skip`, `pass` after daily insight delivery | Skip this insight | Done |
 | `stop_push` | `stop push`, `pause push`, `no more` | Disable daily insights | Confirmed |
 | `resume_push` | `resume push`, `start push` | Re-enable daily insights | Confirmed |
 | `off_topic` | Unrelated question | Rejection line + redirect | Wait for photos |
@@ -192,6 +193,7 @@ Bot: "Got it — adjusting now... ⚡"
 
 - Do **not** store style/music preferences in OpenClaw — backend profile is source of truth
 - Do store: user's name, preferred language, and `last_job_id` for revision matching
+- Do also read `lastDailyInsight` from bridge state when handling `publish / skip` after a daily insight render
 - `last_job_id` is now **structured bridge state first**, session memory second
 - Preferred read source: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
 - Session memory for `last_job_id`: keep only as a lightweight fallback

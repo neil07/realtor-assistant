@@ -71,6 +71,7 @@ Do not use:
 - `action == "submit_feedback"` → call Skill 3
 - `action == "publish"` → send caption + hashtags from last delivery
 - `action == "redo"` → call Skill 2 again with the same photos
+- `action == "skip"` → mark the current daily insight as skipped and wait for the next one
 - `action == "disable_daily_push"` / `"enable_daily_push"` → call Skill 4
 - `action == "reject"` → send `response`, done
 
@@ -120,6 +121,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 - Generation begins only after OpenClaw has photos or richer property assets
 - Store returned `job_id` as `last_job_id`
 - Preferred state sink for `last_job_id`: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+- For daily insight publish/skip controls, also read `lastDailyInsight` from the same bridge state file
 
 ---
 

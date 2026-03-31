@@ -40,6 +40,12 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 OUTPUT_BASE = Path(__file__).parent / "skills" / "listing-video" / "output"
 OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
+DEFAULT_BRIDGE_STATE_PATH = Path(
+    os.getenv(
+        "OPENCLAW_BRIDGE_STATE_PATH",
+        "~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json",
+    )
+).expanduser()
 
 # Lazy imports — populated in lifespan
 _job_mgr = None
@@ -122,6 +128,11 @@ def _require_backend_auth(authorization: str | None = Header(default=None)) -> N
     token = authorization.removeprefix("Bearer ").strip()
     if token != expected:
         raise HTTPException(401, "Invalid bearer token")
+
+
+@app.get("/health")
+async def health() -> dict[str, str | bool]:
+    return {"ok": True, "status": "live"}
 
 
 def _video_url(video_path: str) -> str | None:
@@ -771,11 +782,70 @@ def _looks_like_property_content_request(text: str) -> bool:
     return has_digit and has_address_word
 
 
+def _read_bridge_agent_state(agent_phone: str) -> dict | None:
+    """Best-effort read of the OpenClaw bridge state for post-render controls."""
+    try:
+        raw = json.loads(DEFAULT_BRIDGE_STATE_PATH.read_text("utf-8"))
+    except Exception:
+        return None
+
+    agents = raw.get("agents")
+    if not isinstance(agents, dict):
+        return None
+
+    agent_state = agents.get(agent_phone)
+    return agent_state if isinstance(agent_state, dict) else None
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _infer_post_render_context(last_job: dict | None, bridge_agent_state: dict | None) -> str | None:
+    """
+    Determine the most recent user-facing render context.
+
+    Returns one of:
+    - "delivered"
+    - "daily_insight"
+    - None
+    """
+    latest_kind = None
+    latest_ts = None
+
+    if last_job and last_job.get("status") == "DELIVERED":
+        latest_kind = "delivered"
+        latest_ts = _parse_iso_dt(last_job.get("updated_at")) or _parse_iso_dt(last_job.get("completed_at"))
+
+    if bridge_agent_state:
+        last_delivery = bridge_agent_state.get("lastDelivery")
+        if isinstance(last_delivery, dict):
+            delivery_ts = _parse_iso_dt(last_delivery.get("updatedAt"))
+            if latest_kind is None or (delivery_ts and (latest_ts is None or delivery_ts >= latest_ts)):
+                latest_kind = "delivered"
+                latest_ts = delivery_ts
+
+        last_daily_insight = bridge_agent_state.get("lastDailyInsight")
+        if isinstance(last_daily_insight, dict):
+            insight_ts = _parse_iso_dt(last_daily_insight.get("updatedAt"))
+            if latest_kind is None or (insight_ts and (latest_ts is None or insight_ts >= latest_ts)):
+                latest_kind = "daily_insight"
+                latest_ts = insight_ts
+
+    return latest_kind
+
+
 def _classify_intent(
     text: str,
     has_media: bool,
     profile: dict | None,
     last_job: dict | None,
+    bridge_agent_state: dict | None = None,
 ) -> dict:
     """
     Classify user intent from raw text. Returns action dict.
@@ -784,6 +854,7 @@ def _classify_intent(
     """
     t = text.strip().lower()
     words = set(t.split())
+    post_render_context = _infer_post_render_context(last_job, bridge_agent_state)
 
     # 1. Media present → listing video request (asset-first)
     if has_media:
@@ -868,8 +939,22 @@ def _classify_intent(
             "awaiting": "media_or_missing_property_context",
         }
 
-    # 7. Post-delivery actions (only when there's a recent job)
-    if last_job and last_job.get("status") == "DELIVERED":
+    # 7. Post-render actions.
+    if post_render_context == "daily_insight":
+        if words & _PUBLISH_KEYWORDS:
+            return {
+                "intent": "publish",
+                "action": "publish",
+                "response": "Looks good — publishing this daily insight now. 📈",
+            }
+        if words & _SKIP_KEYWORDS:
+            return {
+                "intent": "skip",
+                "action": "skip",
+                "response": "Skipped this daily insight. We can use the next one instead. ⏭️",
+            }
+
+    if post_render_context == "delivered":
         if words & _PUBLISH_KEYWORDS:
             return {
                 "intent": "publish",
@@ -948,7 +1033,9 @@ async def handle_message(
     except Exception:
         pass  # No jobs yet — that's fine
 
-    result = _classify_intent(payload.text, payload.has_media, profile, last_job)
+    bridge_agent_state = _read_bridge_agent_state(phone)
+
+    result = _classify_intent(payload.text, payload.has_media, profile, last_job, bridge_agent_state)
 
     # Add text-command hints for the next step (so OpenClaw can show them)
     text_hints = _get_text_hints(result["intent"], profile)
@@ -1010,7 +1097,7 @@ def _get_text_hints(
             "next": "Wait for video",
             "examples": ["(processing...)"],
         }
-    if intent in ("publish", "revision", "redo"):
+    if intent in ("publish", "revision", "redo", "skip"):
         return {
             "next": "Send more photos or wait",
             "examples": ["(send photos)", "help"],

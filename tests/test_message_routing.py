@@ -93,3 +93,54 @@ def test_remaining_free_text_after_delivery_is_revision() -> None:
     )
     assert result["intent"] == "revision"
     assert result["action"] == "submit_feedback"
+
+
+def test_daily_insight_publish_uses_recent_bridge_state() -> None:
+    result = _classify_intent(
+        "publish",
+        False,
+        RETURNING_PROFILE,
+        None,
+        {
+            "lastDailyInsight": {
+                "headline": "Inventory is tightening",
+                "updatedAt": "2026-04-01T03:00:00+00:00",
+            }
+        },
+    )
+    assert result["intent"] == "publish"
+    assert result["action"] == "publish"
+
+
+def test_daily_insight_skip_uses_recent_bridge_state() -> None:
+    result = _classify_intent(
+        "skip",
+        False,
+        RETURNING_PROFILE,
+        None,
+        {
+            "lastDailyInsight": {
+                "headline": "Inventory is tightening",
+                "updatedAt": "2026-04-01T03:00:00+00:00",
+            }
+        },
+    )
+    assert result["intent"] == "skip"
+    assert result["action"] == "skip"
+
+
+def test_recent_daily_insight_beats_older_delivered_job_for_skip() -> None:
+    result = _classify_intent(
+        "skip",
+        False,
+        RETURNING_PROFILE,
+        {"status": "DELIVERED", "updated_at": "2026-04-01T02:30:00+00:00"},
+        {
+            "lastDailyInsight": {
+                "headline": "Inventory is tightening",
+                "updatedAt": "2026-04-01T03:00:00+00:00",
+            }
+        },
+    )
+    assert result["intent"] == "skip"
+    assert result["action"] == "skip"

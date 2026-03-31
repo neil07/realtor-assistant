@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from json import dumps
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -91,6 +92,14 @@ def test_api_message_requires_bearer_token_when_configured(monkeypatch) -> None:
     assert response.status_code == 401
 
 
+def test_health_route_is_live() -> None:
+    client = TestClient(server.app)
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "status": "live"}
+
+
 def test_api_message_routes_new_user_daily_insight(monkeypatch) -> None:
     import profile_manager
 
@@ -146,6 +155,44 @@ def test_api_message_routes_returning_user_property_content_before_revision(monk
     body = response.json()
     assert body["intent"] == "property_content"
     assert body["action"] == "start_property_content"
+
+
+def test_api_message_routes_skip_when_recent_daily_insight_exists(monkeypatch, tmp_path) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    state_path = tmp_path / "bridge-state.json"
+    state_path.write_text(
+        dumps(
+            {
+                "agents": {
+                    "+10000000000": {
+                        "agentPhone": "+10000000000",
+                        "lastDailyInsight": {
+                            "headline": "Inventory is tightening",
+                            "updatedAt": "2026-04-01T03:00:00+00:00",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DEFAULT_BRIDGE_STATE_PATH", state_path)
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
+        json={"agent_phone": "+10000000000", "text": "skip", "has_media": False},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "skip"
+    assert body["action"] == "skip"
 
 
 def test_webhook_in_daily_push_control_updates_profile(monkeypatch) -> None:
