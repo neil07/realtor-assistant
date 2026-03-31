@@ -63,6 +63,18 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 6. If `awaiting` is set → wait for next user message, then route through `/api/message` again
 7. Always include `text_commands.examples` as button labels when the channel supports buttons
 
+**Callback contract note:**
+
+- `callback_url` must point to the OpenClaw-side business-event bridge
+- For this project the default contract is `POST http://127.0.0.1:18789/reel-agent/events`
+- Set `OPENCLAW_CALLBACK_BASE_URL=http://127.0.0.1:18789/reel-agent`, then backend uses `"$OPENCLAW_CALLBACK_BASE_URL"/events`
+- OpenClaw bridge auth uses `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
+- Do not point backend callbacks at `/telegram-webhook`; that path is only for Telegram transport ingress
+- Do not assume `/api/sessions/main/messages` is a supported backend callback endpoint
+- OpenClaw structured callback state lives at:
+  - `~/.openclaw/plugins/reel-agent-bridge/state.json`
+  - `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+
 ---
 
 ## Graduation Routing Cases
@@ -180,7 +192,10 @@ Bot: "Got it — adjusting now... ⚡"
 
 - Do **not** store style/music preferences in OpenClaw — backend profile is source of truth
 - Do store: user's name, preferred language, and `last_job_id` for revision matching
-- Session memory for `last_job_id`: keep for up to 24 hours
+- `last_job_id` is now **structured bridge state first**, session memory second
+- Preferred read source: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+- Session memory for `last_job_id`: keep only as a lightweight fallback
+- `last_job_id` must be refreshed after every successful `delivered` callback or revision response
 
 ---
 
@@ -190,4 +205,6 @@ Bot: "Got it — adjusting now... ⚡"
 REEL_AGENT_URL=http://localhost:8000
 REEL_AGENT_TOKEN=your-secret-token
 AGENT_PHONE=+60175029017
+OPENCLAW_CALLBACK_BASE_URL=http://127.0.0.1:18789/reel-agent
+OPENCLAW_CALLBACK_SECRET=replace-with-shared-callback-secret
 ```

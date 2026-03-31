@@ -5,11 +5,26 @@
 ## 0. 环境变量
 
 ```bash
-export REEL_AGENT_URL=http://localhost:8000
+export REEL_AGENT_URL=http://127.0.0.1:8000
 export REEL_AGENT_TOKEN=replace-with-shared-bearer-token
 export AGENT_PHONE=+10000000000
-export CALLBACK_URL=https://your-openclaw-gateway/events
+export OPENCLAW_CALLBACK_BASE_URL=http://127.0.0.1:18789/reel-agent
+export OPENCLAW_CALLBACK_SECRET=replace-with-shared-callback-secret
+export CALLBACK_URL="$OPENCLAW_CALLBACK_BASE_URL/events"
 export MSG_ID=test-msg-001
+```
+
+`CALLBACK_URL` is the OpenClaw-side business-event bridge for Reel Agent callbacks.
+
+Do not use:
+
+- Telegram transport webhook paths such as `/telegram-webhook`
+- `"$OPENCLAW_GATEWAY_URL"/api/sessions/main/messages`
+
+Bridge auth:
+
+```bash
+-H "X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET"
 ```
 
 所有受保护接口都要带：
@@ -205,6 +220,26 @@ curl -s -X POST "$REEL_AGENT_URL/api/daily-trigger?secret=" \
 
 ## 9. OpenClaw 侧回调验收项
 
+### 9.0 bridge smoke test
+
+```bash
+curl -s -X POST "$CALLBACK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET" \
+  -d '{
+    "type": "progress",
+    "job_id": "smoke-job-1",
+    "agent_phone": "'"$AGENT_PHONE"'",
+    "step": "producing",
+    "message": "Smoke test from reel-agent bridge"
+  }' | jq
+```
+
+预期：
+- `ok = true`
+- `target` 存在
+- `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json` 写入该 agent 的 `last_job_id`
+
 收到后端回调时，至少检查这些事件：
 
 ### progress
@@ -239,7 +274,22 @@ curl -s -X POST "$REEL_AGENT_URL/api/daily-trigger?secret=" \
 
 ---
 
-## 10. 当前高风险检查点
+## 10. Telegram 放行门槛（Go / No-Go）
+
+只有下面全部满足，才通知人工去 Telegram 体验：
+
+1. OpenClaw 侧所有用户消息都先命中 `/api/message`
+2. OpenClaw 侧保存并刷新 `last_job_id`
+3. `CALLBACK_URL` 是真实可消费的业务事件入口，而不是 Telegram transport webhook
+4. OpenClaw 已能把 `progress / delivered / failed / daily_insight` 正确渲染给用户
+5. 至少完成一次 `property content -> send photos -> delivered -> adjust/redo` walkthrough
+6. 至少完成一次 `daily insight -> publish/skip` walkthrough
+
+若任一项缺失，则保持 No-Go，只继续项目侧施工或接线。
+
+---
+
+## 11. 当前高风险检查点
 
 1. OpenClaw 是否真的把所有用户消息先打 `/api/message`
 2. `callback_url` 是否真实落到 OpenClaw 可消费的事件入口

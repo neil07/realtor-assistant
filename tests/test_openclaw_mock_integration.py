@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 
@@ -5,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient
 
+import agent.callback_client as callback_client_module
 import server
 from agent.callback_client import CallbackClient
 from orchestrator.progress_notifier import ProgressNotifier
@@ -48,6 +50,29 @@ class RecordingCallbackClient(CallbackClient):
     async def send(self, url: str, payload: dict) -> bool:
         self.calls.append({"url": url, "payload": payload})
         return True
+
+
+class FakeHttpxResponse:
+    def __init__(self, status_code: int = 200, text: str = "ok"):
+        self.status_code = status_code
+        self.text = text
+
+
+class RecordingAsyncClient:
+    calls = []
+
+    def __init__(self, *, timeout: int):
+        self.timeout = timeout
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url: str, json: dict, headers: dict):
+        RecordingAsyncClient.calls.append({"url": url, "json": json, "headers": headers})
+        return FakeHttpxResponse()
 
 
 def test_api_message_requires_bearer_token_when_configured(monkeypatch) -> None:
@@ -227,6 +252,74 @@ def test_progress_notifier_uses_openclaw_events_contract(monkeypatch) -> None:
     assert call["payload"]["openclaw_msg_id"] == "msg-123"
     assert call["payload"]["agent_phone"] == "+10000000000"
     assert call["payload"]["video_url"] == "https://reel-agent.example/output/job-123/final.mp4"
+
+
+def test_callback_client_sends_x_reel_secret_header(monkeypatch) -> None:
+    RecordingAsyncClient.calls = []
+    monkeypatch.setattr(callback_client_module, "OPENCLAW_CALLBACK_SECRET", "bridge-secret")
+    monkeypatch.setattr(callback_client_module.httpx, "AsyncClient", RecordingAsyncClient)
+
+    client = CallbackClient()
+    ok = asyncio.run(client.send("https://openclaw.example/reel-agent/events", {"type": "progress"}))
+
+    assert ok is True
+    assert len(RecordingAsyncClient.calls) == 1
+    call = RecordingAsyncClient.calls[0]
+    assert call["url"] == "https://openclaw.example/reel-agent/events"
+    assert call["headers"]["X-Reel-Secret"] == "bridge-secret"
+    assert call["json"] == {"type": "progress"}
+
+
+def test_progress_notifier_daily_insight_uses_bridge_contract(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_CALLBACK_BASE_URL", "https://openclaw.example/reel-agent")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://reel-agent.example")
+    client = RecordingCallbackClient()
+    notifier = ProgressNotifier(client)
+
+    asyncio.run(
+        notifier.notify_daily_insight(
+            "+10000000000",
+            {
+                "topic": "inventory",
+                "headline": "Inventory is tightening",
+                "caption": "Lehigh Valley inventory is down 8% this week.",
+                "hashtags": ["#realestate", "#marketupdate"],
+                "cta": "DM me for the latest listings",
+                "content_type": "market_stat",
+            },
+            {"portrait": "/tmp/output/insight-card.png"},
+            {"name": "Natalie"},
+        )
+    )
+
+    assert len(client.calls) == 1
+    call = client.calls[0]
+    assert call["url"] == "https://openclaw.example/reel-agent/events"
+    assert call["payload"]["type"] == "daily_insight"
+    assert call["payload"]["agent_phone"] == "+10000000000"
+    assert call["payload"]["agent_name"] == "Natalie"
+    assert call["payload"]["insight"]["headline"] == "Inventory is tightening"
+    assert call["payload"]["image_urls"]["portrait"] == "https://reel-agent.example/output/insight-card.png"
+
+
+def test_progress_notifier_skips_when_callback_target_missing(monkeypatch) -> None:
+    monkeypatch.delenv("OPENCLAW_CALLBACK_BASE_URL", raising=False)
+    client = RecordingCallbackClient()
+    notifier = ProgressNotifier(client)
+
+    asyncio.run(
+        notifier.notify_progress(
+            "job-123",
+            "producing",
+            "Generating AI video clips (this takes ~2 min)...",
+            {
+                "agent_phone": "+10000000000",
+                "openclaw_msg_id": "msg-123",
+            },
+        )
+    )
+
+    assert client.calls == []
 
 
 def test_webhook_in_rejects_invalid_bearer_token(monkeypatch) -> None:

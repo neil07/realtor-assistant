@@ -13,6 +13,7 @@ requires:
     - REEL_AGENT_URL
     - REEL_AGENT_TOKEN
     - AGENT_PHONE
+    - CALLBACK_URL
   bins:
     - curl
     - jq
@@ -33,9 +34,19 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
     "text": "'"$USER_TEXT"'",
     "has_media": '$HAS_MEDIA',
     "media_paths": ['$MEDIA_PATHS_JSON'],
-    "callback_url": "'"$OPENCLAW_GATEWAY_URL"'/api/sessions/main/messages"
+    "callback_url": "'"$CALLBACK_URL"'"
   }'
 ```
+
+`CALLBACK_URL` is the Reel Agent business-event callback target owned by the OpenClaw side.
+In this project the default shape is `POST http://127.0.0.1:18789/reel-agent/events`,
+with `OPENCLAW_CALLBACK_BASE_URL=http://127.0.0.1:18789/reel-agent`
+and backend callbacks authenticated by `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`.
+
+Do not use:
+
+- `/telegram-webhook` for `callback_url` — that is Telegram transport ingress into OpenClaw
+- `/api/sessions/main/messages` as a backend callback target — it is not the project's business-event contract
 
 **Graduation routing contract:**
 
@@ -89,7 +100,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   -d '{
     "agent_phone": "'"$AGENT_PHONE"'",
     "photo_paths": ['$PHOTO_PATHS_JSON'],
-    "callback_url": "'"$OPENCLAW_GATEWAY_URL"'/api/sessions/main/messages",
+    "callback_url": "'"$CALLBACK_URL"'",
     "openclaw_msg_id": "'"$MSG_ID"'",
     "params": {
       "style": "'"$STYLE"'",
@@ -108,6 +119,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 - Property-content text alone does **not** start generation
 - Generation begins only after OpenClaw has photos or richer property assets
 - Store returned `job_id` as `last_job_id`
+- Preferred state sink for `last_job_id`: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
 
 ---
 
@@ -153,6 +165,16 @@ Swap `disable_daily_push` for `enable_daily_push` when handling `resume push`.
 ## Callback Format (Backend → OpenClaw)
 
 Backend sends progress + delivery updates to `callback_url`.
+
+The OpenClaw side must expose a business-event bridge that can consume:
+
+- `progress`
+- `delivered`
+- `failed`
+- `daily_insight`
+
+and then fan those events into Telegram user-visible messages.
+Current concrete implementation: local plugin route `POST /reel-agent/events`.
 
 ```json
 {
@@ -203,3 +225,5 @@ Backend sends progress + delivery updates to `callback_url`.
 - For `delivered`: `publish / adjust / redo`
 - For `daily_insight`: `publish / skip`
 - For `failed`: ask user to resend photos or retry later
+- If `openclaw_msg_id` is present, bridge should prefer `openclaw_msg_id -> Telegram target`
+- If `openclaw_msg_id` is absent, bridge may fall back to `agent_phone -> Telegram DM target`
