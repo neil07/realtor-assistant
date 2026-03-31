@@ -50,15 +50,33 @@ class RecordingCallbackClient(CallbackClient):
         return True
 
 
-def test_api_message_routes_new_user_daily_insight(monkeypatch) -> None:
+def test_api_message_requires_bearer_token_when_configured(monkeypatch) -> None:
     import profile_manager
 
     monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
     server._job_mgr = FakeJobManager()
 
     client = TestClient(server.app)
     response = client.post(
         "/api/message",
+        json={"agent_phone": "+10000000000", "text": "daily insight", "has_media": False},
+    )
+
+    assert response.status_code == 401
+
+
+def test_api_message_routes_new_user_daily_insight(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
         json={"agent_phone": "+10000000000", "text": "daily insight", "has_media": False},
     )
 
@@ -81,6 +99,7 @@ def test_api_message_routes_returning_user_property_content_before_revision(monk
             "city": "Austin",
         },
     )
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
     server._job_mgr = FakeJobManager(
         jobs_by_phone={
             "+10000000000": [{"status": "DELIVERED", "job_id": "job-prev"}],
@@ -90,6 +109,7 @@ def test_api_message_routes_returning_user_property_content_before_revision(monk
     client = TestClient(server.app)
     response = client.post(
         "/api/message",
+        headers={"Authorization": "Bearer test-token"},
         json={
             "agent_phone": "+10000000000",
             "text": "123 Main St open house this Sunday 2pm",
@@ -116,9 +136,12 @@ def test_webhook_in_daily_push_control_updates_profile(monkeypatch) -> None:
     server._job_mgr = FakeJobManager()
     server._dispatcher = FakeDispatcher()
 
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+
     client = TestClient(server.app)
     response = client.post(
         "/webhook/in",
+        headers={"Authorization": "Bearer test-token"},
         json={
             "agent_phone": "+10000000000",
             "photo_paths": [],
@@ -136,7 +159,8 @@ def test_webhook_in_daily_push_control_updates_profile(monkeypatch) -> None:
     ]
 
 
-def test_webhook_in_generation_path_creates_job_and_submits() -> None:
+def test_webhook_in_generation_path_creates_job_and_submits(monkeypatch) -> None:
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
     fake_job_mgr = FakeJobManager()
     fake_dispatcher = FakeDispatcher()
     server._job_mgr = fake_job_mgr
@@ -145,6 +169,7 @@ def test_webhook_in_generation_path_creates_job_and_submits() -> None:
     client = TestClient(server.app)
     response = client.post(
         "/webhook/in",
+        headers={"Authorization": "Bearer test-token"},
         json={
             "agent_phone": "+10000000000",
             "photo_paths": ["/tmp/job-1/photos/front.jpg"],
@@ -202,3 +227,22 @@ def test_progress_notifier_uses_openclaw_events_contract(monkeypatch) -> None:
     assert call["payload"]["openclaw_msg_id"] == "msg-123"
     assert call["payload"]["agent_phone"] == "+10000000000"
     assert call["payload"]["video_url"] == "https://reel-agent.example/output/job-123/final.mp4"
+
+
+def test_webhook_in_rejects_invalid_bearer_token(monkeypatch) -> None:
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+    server._dispatcher = FakeDispatcher()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/webhook/in",
+        headers={"Authorization": "Bearer wrong-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "photo_paths": [],
+            "params": {"action": "disable_daily_push"},
+        },
+    )
+
+    assert response.status_code == 401

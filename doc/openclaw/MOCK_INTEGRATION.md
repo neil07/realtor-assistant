@@ -133,17 +133,18 @@ OpenClaw 收到用户消息后，统一先打：
 - 问题：之前只有 `_classify_intent` 级别测试，没有验证真实 HTTP 入口和 callback 契约。
 - 状态：已补 mock 联调测试。
 
-### Finding 3：文档中的鉴权契约与服务端实现暂未对齐
+### Finding 3：鉴权契约已补齐
 
-- 文档里多处写了：
+- 文档里要求：
   - `Authorization: Bearer $REEL_AGENT_TOKEN`
-- 但当前 `server.py` 实际**没有校验 Authorization header**。
-- 影响：
-  - 文档与真实行为不一致
-  - 如果直接暴露公网，会缺少一层基础保护
-- 结论：这不是本轮 demo blocker，但是真联调前应决定：
-  - 要么补 header 鉴权
-  - 要么把文档改成“当前未启用 auth，仅内网/受控环境使用”
+- 当前 `server.py` 已对这些 OpenClaw-facing 接口补上 Bearer token 校验：
+  - `/api/message`
+  - `/webhook/in`
+  - `/webhook/feedback`
+  - `/api/daily-trigger`
+- 行为：
+  - 未设置 `REEL_AGENT_TOKEN` 时：兼容本地开发，允许无鉴权
+  - 设置后：缺失或错误 token 返回 `401`
 
 ---
 

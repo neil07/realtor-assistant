@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -108,6 +108,20 @@ def _get_dispatcher():
     if _dispatcher is None:
         raise HTTPException(503, "Server not ready")
     return _dispatcher
+
+
+def _require_backend_auth(authorization: str | None = Header(default=None)) -> None:
+    """Protect OpenClaw-facing API routes with optional Bearer token auth."""
+    expected = os.getenv("REEL_AGENT_TOKEN", "").strip()
+    if not expected:
+        return
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing bearer token")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if token != expected:
+        raise HTTPException(401, "Invalid bearer token")
 
 
 def _video_url(video_path: str) -> str | None:
@@ -889,7 +903,10 @@ def _classify_intent(
 
 
 @app.post("/api/message")
-async def handle_message(payload: MessagePayload):
+async def handle_message(
+    payload: MessagePayload,
+    _auth: None = Depends(_require_backend_auth),
+):
     """
     Universal message handler — text-command + intent routing.
 
@@ -989,7 +1006,10 @@ def _get_text_hints(
 
 
 @app.post("/api/daily-trigger")
-async def daily_trigger(secret: str = ""):
+async def daily_trigger(
+    secret: str = "",
+    _auth: None = Depends(_require_backend_auth),
+):
     """
     Manually trigger daily content generation for all active agents.
     Protected by DAILY_TRIGGER_SECRET env var (if set).
@@ -1009,7 +1029,10 @@ async def daily_trigger(secret: str = ""):
 
 
 @app.post("/webhook/feedback")
-async def webhook_feedback(payload: FeedbackPayload):
+async def webhook_feedback(
+    payload: FeedbackPayload,
+    _auth: None = Depends(_require_backend_auth),
+):
     """
     OpenClaw calls this when an agent provides revision feedback after video delivery.
     Classifies the feedback, updates the agent's preference profile,
@@ -1104,7 +1127,10 @@ async def get_profile(phone: str):
 
 
 @app.post("/webhook/in")
-async def webhook_in(payload: WebhookPayload):
+async def webhook_in(
+    payload: WebhookPayload,
+    _auth: None = Depends(_require_backend_auth),
+):
     """
     OpenClaw calls this when a user has confirmed requirements.
     Photos must already be saved to disk by OpenClaw before calling.
