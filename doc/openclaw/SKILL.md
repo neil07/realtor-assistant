@@ -54,6 +54,8 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 - `action == "welcome"` → send `response` to user, done
 - `action == "start_video"` and `auto_generate == true` → call Skill 2 immediately
 - `action == "start_video"` and `awaiting == "style_selection"` → send `response`, wait for next message
+- `action == "start_daily_insight"` → send `response`, keep the request in the daily-insight lane, and hand off to the on-demand daily insight workflow when that OpenClaw integration is available
+- `action == "start_property_content"` → send `response`, keep the user in the property-content lane, and wait for photos or richer property assets before calling Skill 2
 - `action == "set_style"` → store style, ask for confirmation ("go" / "ok")
 - `action == "confirm_and_generate"` → call Skill 2
 - `action == "submit_feedback"` → call Skill 3

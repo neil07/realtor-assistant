@@ -44,8 +44,10 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 
 1. Send `response` to user
 2. If `auto_generate` is true → call `/webhook/in` immediately
-3. If `awaiting` is set → wait for next user message, route through `/api/message` again
-4. Always include `text_commands.examples` as button labels (if channel supports buttons)
+3. If `action == "start_daily_insight"` → keep the request in the daily-insight lane and trigger the on-demand daily insight flow when that integration is available; do not downgrade it to off-topic
+4. If `action == "start_property_content"` → keep the user in the property-content lane and wait for photos or richer property assets on the next message
+5. If `awaiting` is set → wait for next user message, route through `/api/message` again
+6. Always include `text_commands.examples` as button labels (if channel supports buttons)
 
 ---
 
@@ -58,6 +60,8 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 | `listing_video`   | Photos sent                            | Check profile → auto-generate or ask style | Style or generate |
 | `style_selection` | "elegant", "professional", "energetic" | Set style, ask to confirm                  | Confirm           |
 | `confirm`         | "go", "ok", "yes", "done"              | Start video generation                     | Processing        |
+| `daily_insight`   | "daily insight", market update text    | Acknowledge and enter daily-insight flow   | Generate insight  |
+| `property_content`| Listing / open house text              | Acknowledge and wait for photos or assets  | Collect media     |
 | `revision`        | Any text after DELIVERED job           | Submit as feedback                         | Re-processing     |
 | `publish`         | "publish", "post" after delivery       | Provide caption + hashtags                 | Done              |
 | `redo`            | "redo", "again" after delivery         | Restart from scratch                       | Processing        |

@@ -18,6 +18,12 @@ def test_new_user_help_routes_to_welcome() -> None:
     assert result["action"] == "welcome"
 
 
+def test_returning_user_help_phrase_routes_to_help() -> None:
+    result = _classify_intent("what can you do?", False, RETURNING_PROFILE, None)
+    assert result["intent"] == "help"
+    assert result["action"] == "welcome"
+
+
 def test_new_user_daily_insight_still_routes_to_daily_insight() -> None:
     result = _classify_intent("daily insight", False, None, None)
     assert result["intent"] == "daily_insight"

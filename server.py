@@ -710,6 +710,18 @@ _WELCOME_MSG_ZH = (
 )
 
 
+def _looks_like_help_request(text: str) -> bool:
+    t = text.strip().lower()
+    if not t:
+        return False
+
+    words = {word.strip(",.!?;:") for word in t.split()}
+    if t in _HELP_KEYWORDS or words & _HELP_KEYWORDS:
+        return True
+
+    return any(keyword in t for keyword in _HELP_KEYWORDS if " " in keyword)
+
+
 def _looks_like_daily_insight_request(text: str) -> bool:
     t = text.strip().lower()
     return any(keyword in t for keyword in _DAILY_INSIGHT_KEYWORDS)
@@ -770,7 +782,7 @@ def _classify_intent(
         }
 
     # 4. Explicit help / first-contact
-    if words & _HELP_KEYWORDS:
+    if _looks_like_help_request(t):
         is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
         return {
             "intent": "first_contact" if not profile else "help",
