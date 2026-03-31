@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Listing Video Agent — TTS Voice Generation
-Primary: IMA Studio API (MiniMax Speech-02-HD / ByteDance Seed-TTS).
-Fallback: ElevenLabs → OpenAI TTS.
+Primary: ElevenLabs (stateless, instant).
+Fallback: OpenAI TTS → IMA Studio TTS.
 """
 
 import json
@@ -223,25 +223,10 @@ def generate_voiceover(
         "text_length": len(text),
         "voice_id": voice_id or "default",
         "style": style,
-        "engine": "ima",
+        "engine": "elevenlabs",
     })
 
-    # Primary: IMA Studio TTS
-    result = generate_ima_tts(text, output_path)
-    attempts.append(video_diagnostics.build_attempt_record(
-        engine="ima",
-        status=result.get("status", "error"),
-        result=result,
-        characters=len(text),
-    ))
-    if result["status"] == "success":
-        result["engine"] = "ima"
-        result["attempts"] = attempts
-        log_step_end("tts_voiceover", result)
-        return result
-    logger.warning("IMA TTS failed: %s, trying ElevenLabs...", result["message"])
-
-    # Fallback 1: ElevenLabs
+    # Primary: ElevenLabs — stateless single HTTP call, fastest and most reliable
     result = generate_elevenlabs(text, output_path, voice_id=voice_id, style=style)
     attempts.append(video_diagnostics.build_attempt_record(
         engine="elevenlabs",
@@ -254,9 +239,9 @@ def generate_voiceover(
         result["attempts"] = attempts
         log_step_end("tts_voiceover", result)
         return result
-    logger.warning("ElevenLabs failed: %s, trying OpenAI...", result["message"])
+    logger.warning("ElevenLabs failed: %s, trying OpenAI TTS...", result["message"])
 
-    # Fallback 2: OpenAI TTS
+    # Fallback 1: OpenAI TTS — stateless single HTTP call
     result = generate_openai_tts(text, output_path)
     attempts.append(video_diagnostics.build_attempt_record(
         engine="openai_tts",
@@ -264,7 +249,23 @@ def generate_voiceover(
         result=result,
         characters=len(text),
     ))
-    result["engine"] = "openai_tts" if result["status"] == "success" else None
+    if result["status"] == "success":
+        result["engine"] = "openai_tts"
+        result["attempts"] = attempts
+        log_step_end("tts_voiceover", result)
+        return result
+    logger.warning("OpenAI TTS failed: %s, trying IMA TTS...", result["message"])
+
+    # Fallback 2: IMA TTS — task queue, slower, but covers the case where
+    # both ElevenLabs and OpenAI keys are absent
+    result = generate_ima_tts(text, output_path)
+    attempts.append(video_diagnostics.build_attempt_record(
+        engine="ima",
+        status=result.get("status", "error"),
+        result=result,
+        characters=len(text),
+    ))
+    result["engine"] = "ima" if result["status"] == "success" else None
     result["attempts"] = attempts
     log_step_end("tts_voiceover", result)
     return result

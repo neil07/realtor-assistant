@@ -1,0 +1,217 @@
+{% extends "base.html" %} {% set active_page = "dashboard" %} {% block title
+%}仪表盘 — Reel Agent Console{% endblock %} {% block content %}
+<div
+  class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10"
+>
+  <h1 class="text-3xl font-bold tracking-tight text-slate-900">客户列表</h1>
+  <a
+    href="/console/onboard"
+    class="inline-flex items-center justify-center px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl shadow-[0_4px_14px_rgba(37,99,235,0.25)] active:scale-95 transition-all duration-200 group"
+  >
+    <svg
+      class="w-5 h-5 mr-1.5 transition-transform group-hover:scale-110"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        d="M12 4v16m8-8H4"
+      />
+    </svg>
+    新增客户
+  </a>
+</div>
+
+{% if clients %}
+<!-- Summary Metric Cards -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-10">
+  <div
+    class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden"
+  >
+    <div class="text-slate-500 text-sm font-medium mb-1">总客户数</div>
+    <div class="text-3xl font-bold text-slate-900">{{ clients|length }}</div>
+  </div>
+  <div
+    class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden group"
+  >
+    <div
+      class="absolute inset-0 bg-gradient-to-br from-emerald-50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+    ></div>
+    <div class="relative">
+      <div class="text-slate-500 text-sm font-medium mb-1">视频就绪</div>
+      <div class="text-3xl font-bold text-slate-900">
+        {{ clients|selectattr('completeness.readiness.video.ready')|list|length
+        }}
+      </div>
+    </div>
+  </div>
+  <div
+    class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden group"
+  >
+    <div
+      class="absolute inset-0 bg-gradient-to-br from-blue-50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+    ></div>
+    <div class="relative">
+      <div class="text-slate-500 text-sm font-medium mb-1">洞察就绪</div>
+      <div class="text-3xl font-bold text-slate-900">
+        {{
+        clients|selectattr('completeness.readiness.insight.ready')|list|length
+        }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Table -->
+<div
+  class="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm"
+>
+  <div class="overflow-x-auto">
+    <table class="w-full text-left border-collapse">
+      <thead>
+        <tr class="border-b border-slate-200 bg-slate-50">
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            姓名
+          </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            电话
+          </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            表单状态
+          </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            完整度
+          </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            就绪
+          </th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for c in clients %} {% set p = c.profile %} {% set comp =
+        c.completeness %}
+        <tr class="hover:bg-slate-50/80 transition-colors group">
+          <td class="py-4 px-6">
+            <a
+              href="/console/client/{{ p.phone }}"
+              class="text-slate-900 font-semibold hover:text-blue-600 transition-colors inline-block pb-0.5 border-b border-transparent hover:border-blue-600/30"
+            >
+              {{ p.name or '—' }}
+            </a>
+          </td>
+          <td class="py-4 px-6 text-slate-500 font-mono text-sm">
+            {{ p.phone }}
+          </td>
+          <td class="py-4 px-6">
+            {% if p._form_submitted %}
+            <span
+              class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200"
+              >已填写</span
+            >
+            {% elif p._form_opened_at %}
+            <span
+              class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-700 border border-amber-200"
+              >已打开</span
+            >
+            {% elif p._form_token %}
+            <span
+              class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200"
+              >待填写</span
+            >
+            {% else %}
+            <span class="text-slate-400 text-sm">—</span>
+            {% endif %}
+          </td>
+          <td class="py-4 px-6 w-48">
+            <div class="flex items-center gap-3">
+              <div
+                class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden shadow-inner"
+              >
+                <div
+                  class="h-full rounded-full transition-all duration-500 {% if comp.percentage >= 70 %}bg-emerald-500{% elif comp.percentage >= 40 %}bg-amber-400{% else %}bg-rose-500{% endif %}"
+                  style="width: {{ comp.percentage }}%;"
+                ></div>
+              </div>
+              <span class="text-sm font-semibold text-slate-500 w-9 text-right"
+                >{{ comp.percentage }}%</span
+              >
+            </div>
+          </td>
+          <td class="py-4 px-6">
+            <div class="flex flex-wrap gap-2">
+              {% if comp.readiness.video.ready %}
+              <span
+                class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 uppercase"
+                >视频</span
+              >
+              {% else %}
+              <span
+                class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-50 text-rose-600 border border-rose-200 uppercase"
+                title="缺少: {{ comp.readiness.video.missing|join(', ') }}"
+                >视频</span
+              >
+              {% endif %} {% if comp.readiness.insight.ready %}
+              <span
+                class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200 uppercase"
+                >洞察</span
+              >
+              {% else %}
+              <span
+                class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-50 text-rose-600 border border-rose-200 uppercase"
+                title="缺少: {{ comp.readiness.insight.missing|join(', ') }}"
+                >洞察</span
+              >
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<div
+  class="flex flex-col items-center justify-center py-20 px-4 mt-8 border-2 border-dashed border-slate-200 rounded-3xl bg-white shadow-sm"
+>
+  <div class="bg-blue-50 p-4 rounded-full mb-4 ring-1 ring-blue-100">
+    <svg
+      class="w-8 h-8 text-blue-500"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.5"
+        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+      />
+    </svg>
+  </div>
+  <h3 class="text-xl font-bold text-slate-900 mb-2">暂无客户</h3>
+  <p class="text-slate-500 mb-8 text-center max-w-sm leading-relaxed">
+    添加第一位经纪人客户，系统会自动发送 onboarding 表单收集偏好信息。
+  </p>
+  <a
+    href="/console/onboard"
+    class="inline-flex items-center justify-center px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl shadow-[0_4px_14px_rgba(37,99,235,0.25)] active:scale-95 transition-all duration-200"
+  >
+    添加第一位客户
+  </a>
+</div>
+{% endif %} {% endblock %}

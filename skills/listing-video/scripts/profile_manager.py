@@ -62,6 +62,31 @@ def create_profile(
             "language": language,
             "daily_push_enabled": True,  # opt-out via "停止每日推送"
         },
+        # 2.0: business profile
+        "business": {
+            "neighborhoods": [],
+            "price_range": "",
+            "client_demographic": "",
+            "specialty": "",
+            "transaction_volume": "",
+        },
+        # 2.0: personal brand
+        "brand": {
+            "tone": "",
+            "tagline": "",
+            "logo_available": False,
+        },
+        # 2.0: social media presence
+        "social_media": {
+            "platforms": [],
+            "posting_frequency": "",
+            "content_goals": "",
+            "content_dislikes": [],
+        },
+        # 2.0: local market knowledge
+        "market": {
+            "trends_interest": [],
+        },
         # 2.0: learned from feedback over time
         "learned_patterns": {
             "style_confirmed": [],       # styles agent accepted without complaint
@@ -301,3 +326,92 @@ def should_offer_voice_clone(phone: str) -> bool:
 def mark_voice_clone_offered(phone: str) -> None:
     """Mark that we've offered voice cloning to this agent."""
     update_profile(phone, {"voice_clone_offered": True})
+
+
+# ---------------------------------------------------------------------------
+# Skill Brief Management
+# ---------------------------------------------------------------------------
+
+BRIEFS_DIR = PROFILES_DIR / "briefs"
+DEFAULT_BRIEF_PATH = Path(__file__).parent.parent / "prompts" / "creative_director.md"
+
+
+def _safe_phone(phone: str) -> str:
+    """Sanitize phone for use as directory name (strips +, spaces)."""
+    return "".join(c for c in phone if c.isdigit() or c == "+").lstrip("+") or phone
+
+
+def get_skill_brief_path(phone: str, skill_type: str = "video") -> Path:
+    """Return the path for an agent's Skill brief (file may not exist yet)."""
+    return BRIEFS_DIR / _safe_phone(phone) / f"{skill_type}.md"
+
+
+def init_skill_brief(phone: str, skill_type: str = "video") -> Path:
+    """
+    Ensure an agent has a personal Skill brief file.
+
+    On first call: copies the global default brief for this agent.
+    Subsequent calls: returns the existing path unchanged.
+
+    Returns:
+        Path to the agent's brief file.
+    """
+    brief_path = get_skill_brief_path(phone, skill_type)
+    if not brief_path.exists():
+        brief_path.parent.mkdir(parents=True, exist_ok=True)
+        brief_path.write_text(DEFAULT_BRIEF_PATH.read_text())
+    return brief_path
+
+
+def get_skill_brief(phone: str, skill_type: str = "video") -> str:
+    """
+    Load an agent's Skill brief content (auto-initializes on first call).
+
+    Returns:
+        Markdown string of the agent's creative brief.
+    """
+    return init_skill_brief(phone, skill_type).read_text()
+
+
+def update_skill_brief(phone: str, content: str, skill_type: str = "video") -> Path:
+    """
+    Overwrite an agent's Skill brief with new content.
+
+    Called by the admin backend when an operator edits a brief.
+
+    Returns:
+        Path to the updated brief file.
+    """
+    brief_path = get_skill_brief_path(phone, skill_type)
+    brief_path.parent.mkdir(parents=True, exist_ok=True)
+    brief_path.write_text(content)
+    return brief_path
+
+
+def list_skill_briefs() -> list[dict]:
+    """
+    List all agents that have at least one customized Skill brief.
+
+    Returns:
+        List of dicts: [{phone, skill_type, path, size_bytes, is_customized}]
+    """
+    result = []
+    if not BRIEFS_DIR.exists():
+        return result
+
+    for agent_dir in sorted(BRIEFS_DIR.iterdir()):
+        if not agent_dir.is_dir():
+            continue
+        phone = agent_dir.name
+        for brief_file in agent_dir.glob("*.md"):
+            skill_type = brief_file.stem
+            default_content = DEFAULT_BRIEF_PATH.read_text() if DEFAULT_BRIEF_PATH.exists() else ""
+            is_customized = brief_file.read_text() != default_content
+            result.append({
+                "phone": phone,
+                "skill_type": skill_type,
+                "path": str(brief_file),
+                "size_bytes": brief_file.stat().st_size,
+                "is_customized": is_customized,
+            })
+    return result

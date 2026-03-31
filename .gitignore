@@ -23,3 +23,14 @@ skills/listing-video/output/
 
 # 音乐素材（二进制大文件）
 skills/listing-video/assets/music/
+
+# 经纪人 profile 数据（含真实手机号，运行时生成）
+skills/listing-video/profiles/*.json
+skills/listing-video/profiles/briefs/
+
+# 截图产出
+*.png
+*.jpg
+
+# Playwright MCP 本地状态
+.playwright-mcp/

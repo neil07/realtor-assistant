@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>All Set — Reel Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+    </style>
+  </head>
+  <body class="bg-slate-50 min-h-screen flex items-center justify-center p-4">
+    <div
+      class="max-w-md w-full text-center bg-white rounded-3xl p-10 sm:p-12 shadow-[0_8px_30px_rgb(0,0,0,0.04)] ring-1 ring-slate-900/5 hover:shadow-[0_15px_40px_rgb(0,0,0,0.08)] transition-shadow duration-500"
+    >
+      {% if already_submitted %}
+      <div
+        class="text-6xl mb-6 transform hover:scale-110 transition-transform duration-300"
+      >
+        📋
+      </div>
+      <h1 class="text-2xl font-bold text-slate-900 mb-3 tracking-tight">
+        Already Submitted
+      </h1>
+      <p class="text-slate-500 leading-relaxed text-[15px]">
+        Thanks <span class="font-semibold text-slate-800">{{ name }}</span>!
+        You've already filled out this form. Your preferences are saved — we'll
+        use them for your next video.
+      </p>
+      {% else %}
+      <div class="text-6xl mb-6 animate-bounce">🎉</div>
+      <h1 class="text-2xl font-bold text-slate-900 mb-3 tracking-tight">
+        You're All Set, {{ name }}!
+      </h1>
+      <p class="text-slate-500 leading-relaxed text-[15px]">
+        Your preferences have been saved. Next time you send us listing photos,
+        we'll create a video that matches your style perfectly.
+      </p>
+      {% endif %}
+      <div
+        class="mt-12 flex items-center justify-center gap-1.5 text-xs text-slate-400 font-bold tracking-widest uppercase"
+      >
+        <span>Powered by</span><span class="text-slate-900">Reel Agent</span>
+      </div>
+    </div>
+  </body>
+</html>

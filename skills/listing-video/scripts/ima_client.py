@@ -276,7 +276,7 @@ def _poll_task(
         if elapsed > max_wait:
             raise TimeoutError(f"Task {task_id} timed out after {max_wait}s")
 
-        resp = requests.post(url, json={"task_id": task_id}, headers=headers, timeout=30)
+        resp = requests.post(url, json={"task_id": task_id}, headers=headers, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") not in (0, 200):
@@ -314,20 +314,18 @@ def generate_video_clip(
     output_path: str,
     duration: int = 5,
     aspect_ratio: str = "9:16",
-    last_frame_path: str = None,
-    model_id: str = "kling-v2-6",
+    model_id: str = "wan2.6-i2v",
     api_key: str = None,
 ) -> dict:
     """
-    Generate a video clip from photo(s) using IMA image-to-video.
+    Generate a video clip from a photo using IMA image-to-video.
 
     Args:
-        image_path: First (or only) frame image path.
+        image_path: Source frame image path.
         motion_prompt: Cinematic motion description for the clip.
         output_path: Where to save the resulting .mp4.
-        duration: Clip duration in seconds (5–10).
+        duration: Clip duration in seconds (5 or 10 for Kling).
         aspect_ratio: "9:16" (vertical) or "16:9" (horizontal).
-        last_frame_path: Optional second frame for smooth transitions.
         model_id: IMA model ID (e.g. "kling-v2-6", "wan2.6-i2v", "ima-pro").
         api_key: IMA API key (falls back to IMA_API_KEY env var).
 
@@ -340,36 +338,17 @@ def generate_video_clip(
     if not api_key:
         return {"status": "error", "message": "IMA_API_KEY not set"}
 
-    use_last_frame = bool(last_frame_path and os.path.exists(last_frame_path))
-    task_type = "first_last_frame_to_video" if use_last_frame else "image_to_video"
-
-    try:
-        # Upload image(s) to IMA CDN
-        first_url = upload_image(image_path, api_key)
-        input_images = [first_url]
-        if use_last_frame:
-            last_url = upload_image(last_frame_path, api_key)
-            input_images = [first_url, last_url]
-
-        # Fetch model params from product list
+    def _run(task_type: str, input_images: list[str]) -> dict:
+        """Inner: fetch params, create task, poll, download."""
         model_params = _get_model_params(api_key, task_type, model_id)
-
-        # Override form defaults with our desired values
         extra = {"duration": duration, "aspect_ratio": aspect_ratio}
-
-        # Create task
         task_id = _create_task(api_key, task_type, model_params, motion_prompt, input_images, extra)
         logger.info("IMA task created: %s (model=%s, task=%s)", task_id, model_id, task_type)
-
-        # Poll for completion
         result_url = _poll_task(api_key, task_id, max_wait=VIDEO_MAX_WAIT)
-
-        # Download video
         video_resp = requests.get(result_url, timeout=120)
         video_resp.raise_for_status()
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(video_resp.content)
-
         return {
             "status": "success",
             "video_path": output_path,
@@ -377,6 +356,13 @@ def generate_video_clip(
             "model": model_id,
             "task_id": task_id,
         }
+
+    try:
+        # Upload first frame only — single-frame image_to_video is the reliable path.
+        # first_last_frame_to_video has consistent 500s on kling-v2-6; skip it to
+        # avoid wasting credits on a retry that always fails.
+        first_url = upload_image(image_path, api_key)
+        return _run("image_to_video", [first_url])
 
     except Exception as e:
         logger.error("IMA video generation failed: %s", e)

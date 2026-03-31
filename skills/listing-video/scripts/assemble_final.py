@@ -112,6 +112,7 @@ def concat_clips(
 def _probe_resolution(path: str) -> tuple[int, int]:
     """Return (width, height) of the first video stream in a file, or (0, 0)."""
     data = _run_ffprobe_json([
+        "-select_streams", "v:0",
         "-show_entries", "stream=width,height",
         "-of", "json", path,
     ])
@@ -658,6 +659,7 @@ def add_text_overlays(
     agent_name: str = None,
     agent_phone: str = None,
     font_path: str = None,
+    narration_items: list[dict] | None = None,
 ) -> dict:
     """
     Burn text overlays onto the video.
@@ -668,7 +670,9 @@ def add_text_overlays(
     Layout:
       - Top (0 to min(5s, 30% of video)): address line + price line
       - Bottom (last 4s): agent name + phone (CTA)
+      - Per-scene subtitles (narration_items): bottom center, timed per scene
     """
+    import textwrap
     import tempfile
 
     duration = get_duration(video_path)
@@ -677,8 +681,9 @@ def add_text_overlays(
 
     has_title = bool(address or price)
     has_cta = bool(agent_name or agent_phone)
+    has_narrations = bool(narration_items)
 
-    if not has_title and not has_cta:
+    if not has_title and not has_cta and not has_narrations:
         subprocess.run(["cp", video_path, output_path], check=True)
         return {"status": "success", "video_path": output_path}
 
@@ -702,6 +707,30 @@ def add_text_overlays(
         title_png = os.path.join(tmp_dir, "title.png")
         if _create_text_overlay_png(vid_w, vid_h, title_texts, title_png, font_path):
             overlay_inputs.append((title_png, f"between(t,0,{title_end:.1f})"))
+
+    if has_narrations:
+        # Per-scene subtitles: bottom center, above CTA area.
+        # Each scene gets its own PNG so it can be shown at exact timestamps.
+        fontsize = max(28, int(38 * vid_w / 1080))
+        line_height = fontsize + 14
+        chars_per_line = max(20, int(32 * vid_w / 1080))
+        # Position: bottom of text block = vid_h - 220 (well above CTA region)
+        for idx, item in enumerate(narration_items):
+            text = item.get("text", "").strip()
+            if not text:
+                continue
+            lines = textwrap.wrap(text, width=chars_per_line) or [text]
+            total_h = len(lines) * line_height
+            start_y = vid_h - 220 - total_h
+            narr_texts = [
+                {"text": line, "y": start_y + i * line_height, "fontsize": fontsize}
+                for i, line in enumerate(lines)
+            ]
+            narr_png = os.path.join(tmp_dir, f"narr_{idx:02d}.png")
+            t_start = max(0.0, item.get("start", 0.0))
+            t_end = min(duration, item.get("end", duration))
+            if _create_text_overlay_png(vid_w, vid_h, narr_texts, narr_png, font_path):
+                overlay_inputs.append((narr_png, f"between(t,{t_start:.2f},{t_end:.2f})"))
 
     if has_cta:
         cta_texts = []
@@ -1136,15 +1165,6 @@ def full_assembly_v2(
             result = subprocess.run(cmd, capture_output=True, text=True)
 
             if result.returncode == 0:
-                # Burn subtitle text onto merged clip (non-fatal if it fails)
-                subtitle_text = scene.get("text_narration", "").strip()
-                if subtitle_text:
-                    sub_path = merged_path.replace(".mp4", "_sub.mp4")
-                    if _burn_subtitle_on_clip(merged_path, subtitle_text, sub_path, font_path):
-                        os.replace(sub_path, merged_path)
-                    elif os.path.exists(sub_path):
-                        os.remove(sub_path)
-
                 merged_dur = get_duration(merged_path)
                 logger.info("  Scene %02d: merged %.1fs  %s", seq, merged_dur, merged_path)
                 scene_clips_with_audio.append(merged_path)
@@ -1194,6 +1214,19 @@ def full_assembly_v2(
         log_step_end("assembly_v2", result)
         return result
 
+    # Calculate per-scene subtitle timing for final overlay pass.
+    # Accounts for 0.3s crossfade overlap so subtitle timestamps align with the
+    # concatenated video, not the raw clip durations.
+    _xfade_len = 0.3
+    scene_narration_items: list[dict] = []
+    _t = 0.0
+    for _i, (_cp, _sc) in enumerate(zip(scene_clips_with_audio, scene_plan)):
+        _dur = get_duration(_cp)
+        _text = _sc.get("text_narration", "").strip()
+        if _text:
+            scene_narration_items.append({"text": _text, "start": _t, "end": _t + _dur})
+        _t += _dur - (_xfade_len if _i < len(scene_clips_with_audio) - 1 else 0.0)
+
     # Step 2: Concatenate all scene clips
     if progress_callback:
         progress_callback("Concatenating scenes...")
@@ -1236,8 +1269,8 @@ def full_assembly_v2(
     target_ratio = resolve_aspect_ratio(aspect_ratio, channel)
     format_result = create_output_format(final_path, output_dir, listing_id, target_ratio)
 
-    # Step 5: Burn text overlays (address, price, agent CTA)
-    has_any_overlay = any([address, price, agent_name, agent_phone])
+    # Step 5: Burn text overlays (address, price, agent CTA, per-scene narrations)
+    has_any_overlay = any([address, price, agent_name, agent_phone, scene_narration_items])
     overlay_applied = False
     if has_any_overlay:
         if progress_callback:
@@ -1251,6 +1284,7 @@ def full_assembly_v2(
             agent_name=agent_name,
             agent_phone=agent_phone,
             font_path=font_path,
+            narration_items=scene_narration_items if scene_narration_items else None,
         )
         if overlay_result["status"] == "success":
             os.replace(overlay_path, format_result["video_path"])

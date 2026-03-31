@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome — Reel Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+      /* Hide radio/checkbox natively but keep them keyboard accessible */
+      .peer:checked + .card-select {
+        border-color: #3b82f6;
+        background-color: rgba(59, 130, 246, 0.05);
+        color: #1e3a8a;
+      }
+      .peer:checked + .card-select .check-icon {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .peer:focus-visible + .card-select {
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+      }
+    </style>
+  </head>
+  <body
+    class="bg-slate-50 min-h-screen text-slate-800 flex items-center justify-center p-4 sm:p-8"
+  >
+    <div
+      class="w-full max-w-xl bg-white rounded-3xl p-8 sm:p-10 shadow-[0_8px_30px_rgb(0,0,0,0.04)] ring-1 ring-slate-900/5 transition-shadow hover:shadow-[0_8px_40px_rgb(0,0,0,0.08)] duration-500"
+    >
+      <div class="text-center mb-10">
+        <h1 class="text-3xl font-bold tracking-tight text-slate-900 mb-3">
+          Welcome, {{ name }}!
+        </h1>
+        <p class="text-slate-500 text-sm">
+          Help us personalize your content — takes about 1 minute.
+        </p>
+      </div>
+
+      <form
+        method="POST"
+        action="/console/form/{{ token }}/submit"
+        class="space-y-8"
+      >
+        <!-- Name -->
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Your Name <span class="text-red-500">*</span></label
+          >
+          <input
+            type="text"
+            name="name"
+            value="{{ name }}"
+            required
+            placeholder="Your full name"
+            class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 shadow-sm"
+          />
+        </div>
+
+        <!-- Markets served -->
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Markets You Serve <span class="text-red-500">*</span></label
+          >
+          <input
+            type="text"
+            name="market_area"
+            required
+            placeholder="e.g. Frisco TX, Plano TX"
+            class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 shadow-sm"
+          />
+        </div>
+
+        <!-- City -->
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-700">City</label>
+          <input
+            type="text"
+            name="city"
+            placeholder="e.g. Dallas, TX"
+            class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 shadow-sm"
+          />
+        </div>
+
+        <!-- Typical clients -->
+        <div class="space-y-3">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Your Typical Clients</label
+          >
+          <div class="flex flex-wrap gap-2.5">
+            {% for val, label in [('first-time buyers', 'First-time Buyers'),
+            ('investors', 'Investors'), ('luxury', 'Luxury'), ('move-up',
+            'Move-up'), ('downsizers', 'Downsizers')] %}
+            <label class="relative cursor-pointer">
+              <input
+                type="radio"
+                name="client_demographic"
+                value="{{ val }}"
+                class="peer sr-only"
+              />
+              <div
+                class="card-select px-5 py-2.5 rounded-full border border-slate-200 text-sm font-medium text-slate-600 transition-all hover:bg-slate-50 hover:border-slate-300"
+              >
+                {{ label }}
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Video style -->
+        <div class="space-y-3">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Video Style <span class="text-red-500">*</span></label
+          >
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <!-- Elegant -->
+            <label class="relative cursor-pointer group">
+              <input
+                type="radio"
+                name="style"
+                value="elegant"
+                required
+                class="peer sr-only"
+              />
+              <div
+                class="card-select h-full flex flex-col items-center p-5 rounded-2xl border border-slate-200 transition-all group-hover:border-slate-300 shadow-sm group-hover:shadow-md"
+              >
+                <span
+                  class="text-3xl mb-3 transform transition-transform group-hover:scale-110 duration-300"
+                  >✨</span
+                >
+                <span class="font-semibold text-slate-900 mb-1">Elegant</span>
+                <span class="text-xs text-slate-500 text-center"
+                  >Smooth, luxurious feel</span
+                >
+              </div>
+            </label>
+            <!-- Energetic -->
+            <label class="relative cursor-pointer group">
+              <input
+                type="radio"
+                name="style"
+                value="energetic"
+                class="peer sr-only"
+              />
+              <div
+                class="card-select h-full flex flex-col items-center p-5 rounded-2xl border border-slate-200 transition-all group-hover:border-slate-300 shadow-sm group-hover:shadow-md"
+              >
+                <span
+                  class="text-3xl mb-3 transform transition-transform group-hover:scale-110 duration-300"
+                  >⚡</span
+                >
+                <span class="font-semibold text-slate-900 mb-1">Energetic</span>
+                <span class="text-xs text-slate-500 text-center"
+                  >Fast-paced, dynamic</span
+                >
+              </div>
+            </label>
+            <!-- Professional -->
+            <label class="relative cursor-pointer group">
+              <input
+                type="radio"
+                name="style"
+                value="professional"
+                checked
+                class="peer sr-only"
+              />
+              <div
+                class="card-select h-full flex flex-col items-center p-5 rounded-2xl border border-slate-200 transition-all group-hover:border-slate-300 shadow-sm group-hover:shadow-md"
+              >
+                <span
+                  class="text-3xl mb-3 transform transition-transform group-hover:scale-110 duration-300"
+                  >🏢</span
+                >
+                <span class="font-semibold text-slate-900 mb-1"
+                  >Professional</span
+                >
+                <span class="text-xs text-slate-500 text-center"
+                  >Clean, authoritative</span
+                >
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Social platforms -->
+        <div class="space-y-3">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Your Social Platforms</label
+          >
+          <div class="flex flex-wrap gap-2.5">
+            {% for val, label in [('instagram', 'Instagram'), ('facebook',
+            'Facebook'), ('tiktok', 'TikTok'), ('youtube', 'YouTube'), ('other',
+            'Other')] %}
+            <label class="relative cursor-pointer">
+              <input
+                type="checkbox"
+                name="platforms"
+                value="{{ val }}"
+                class="peer sr-only"
+              />
+              <div
+                class="card-select flex items-center gap-2 pl-9 pr-5 py-2.5 rounded-full border border-slate-200 text-sm font-medium text-slate-600 transition-all hover:bg-slate-50 hover:border-slate-300 relative"
+              >
+                <svg
+                  class="check-icon w-4 h-4 text-blue-500 opacity-0 transform scale-50 transition-all duration-300 absolute left-3.5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  stroke-width="3"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+                <span>{{ label }}</span>
+              </div>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Language -->
+        <div class="space-y-2">
+          <label class="block text-sm font-semibold text-slate-700"
+            >Preferred Language <span class="text-red-500">*</span></label
+          >
+          <div class="relative shadow-sm">
+            <select
+              name="language"
+              required
+              class="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200 font-medium"
+            >
+              <option value="en" selected>English</option>
+              <option value="zh">中文</option>
+              <option value="ms">Bahasa Melayu</option>
+              <option value="es">Español</option>
+            </select>
+            <div
+              class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-500"
+            >
+              <svg
+                class="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 9l-7 7-7-7"
+                />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-4 mt-8 bg-slate-900 text-white text-lg font-semibold rounded-xl shadow-[0_5px_20px_rgba(15,23,42,0.2)] hover:bg-slate-800 hover:shadow-[0_5px_25px_rgba(15,23,42,0.3)] active:scale-[0.98] active:shadow-none transition-all duration-300 flex items-center justify-center gap-2"
+        >
+          Get Started ✨
+        </button>
+      </form>
+
+      <div
+        class="text-center mt-8 space-x-1 text-slate-400 text-xs font-semibold tracking-wider uppercase"
+      >
+        <span>Powered by</span><span class="text-slate-900">Reel Agent</span>
+      </div>
+    </div>
+  </body>
+</html>

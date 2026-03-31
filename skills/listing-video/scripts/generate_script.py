@@ -41,9 +41,15 @@ def build_script_request(
     market_context: str = "",
     city: str = "",
     years: str = "10",
+    photo_images: list[dict] | None = None,
 ) -> dict:
     """
     Build a Claude API request for voiceover script generation.
+
+    Args:
+        photo_images: Optional list of base64 image dicts from encode_image().
+                      When provided, Claude sees the actual photos alongside the
+                      structured analysis — producing more specific, vivid scripts.
 
     Returns:
         API request dict (pass to client.messages.parse() with output_format=ScriptOutput)
@@ -62,10 +68,22 @@ def build_script_request(
         market_context=market_context,
     )
 
+    # Build content: interleave labelled images then append the text prompt.
+    # Claude reads images left-to-right before the instruction text, giving it
+    # visual context when writing the hook, walkthrough, and closer.
+    if photo_images:
+        content: list[dict] = []
+        for i, img in enumerate(photo_images):
+            content.append({"type": "text", "text": f"Photo {i + 1}:"})
+            content.append(img)
+        content.append({"type": "text", "text": prompt})
+    else:
+        content = prompt
+
     return {
         "model": "claude-sonnet-4-6",
         "max_tokens": 2048,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": content}],
     }
 
 
@@ -126,6 +144,7 @@ def run(
     photo_analysis: dict,
     address: str,
     price: str,
+    photo_paths: list[str] | None = None,
     **kwargs,
 ) -> dict:
     """
@@ -134,11 +153,23 @@ def run(
     Calls Claude with output_format=ScriptOutput to guarantee valid JSON.
     No fragile text parsing — schema is enforced by the API.
 
+    Args:
+        photo_paths: Optional list of image file paths. When provided, images are
+                     base64-encoded and sent to Claude Vision so it writes the script
+                     from direct visual observation, not just the text analysis.
+
     Returns:
         Script dict with hook/walkthrough/closer/full_script/caption/word_count/
         estimated_duration/photo_sequence, plus optional validation_issues.
     """
-    request = build_script_request(photo_analysis, address, price, **kwargs)
+    photo_images = None
+    if photo_paths:
+        from analyze_photos import encode_image
+        photo_images = [encode_image(p) for p in photo_paths]
+
+    request = build_script_request(
+        photo_analysis, address, price, photo_images=photo_images, **kwargs
+    )
     client = anthropic.Anthropic()
     response = client.messages.parse(**request, output_format=ScriptOutput)
     result = _to_script_dict(response.parsed_output)

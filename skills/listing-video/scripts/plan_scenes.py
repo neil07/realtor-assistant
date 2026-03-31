@@ -34,6 +34,7 @@ def build_scene_plan_request(
     language: str = "en",
     photo_images: list[dict] | None = None,
     file_ids: list[str] | None = None,
+    voiceover_script: str | None = None,
 ) -> dict:
     """
     Build a Claude API request for AI scene planning.
@@ -58,13 +59,17 @@ def build_scene_plan_request(
         - Use client.beta.messages.create(**request, betas=["files-api-2025-04-14"])
           when file_ids are provided.
     """
-    prompt_with_lang = PLANNER_PROMPT.replace("${language}", language)
+    prompt_ready = (
+        PLANNER_PROMPT
+        .replace("${language}", language)
+        .replace("${voiceover_script}", voiceover_script or "")
+    )
 
     # System block: large static prompt cached for 5 minutes
     system = [
         {
             "type": "text",
-            "text": prompt_with_lang,
+            "text": prompt_ready,
             "cache_control": {"type": "ephemeral"},
         }
     ]
@@ -212,6 +217,7 @@ def run(
     language: str = "en",
     with_images: bool = True,
     file_ids: list[str] | None = None,
+    voiceover_script: str | None = None,
 ) -> list[dict]:
     """
     Run scene planning end-to-end: build request → call Claude API → parse result.
@@ -238,7 +244,10 @@ def run(
     photo_images = None
     if file_ids is not None:
         # File IDs provided — skip base64 encoding entirely
-        request = build_scene_plan_request(photos, property_info, language, file_ids=file_ids)
+        request = build_scene_plan_request(
+            photos, property_info, language,
+            file_ids=file_ids, voiceover_script=voiceover_script,
+        )
         client = anthropic.Anthropic()
         response = client.beta.messages.create(
             **request, betas=["files-api-2025-04-14"]
@@ -247,7 +256,10 @@ def run(
         if with_images:
             from analyze_photos import encode_image
             photo_images = [encode_image(os.path.join(photo_dir, f)) for f in photos]
-        request = build_scene_plan_request(photos, property_info, language, photo_images)
+        request = build_scene_plan_request(
+            photos, property_info, language, photo_images,
+            voiceover_script=voiceover_script,
+        )
         client = anthropic.Anthropic()
         response = client.messages.create(**request)
 

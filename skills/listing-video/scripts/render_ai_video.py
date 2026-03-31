@@ -14,19 +14,59 @@ from pathlib import Path
 # IMA Studio — primary engine
 # ---------------------------------------------------------------------------
 
+def _crop_to_aspect_ratio(image_path: str, target_w: int, target_h: int) -> str:
+    """
+    Center-crop an image to the target aspect ratio and return a temp file path.
+
+    IMA Kling generates output at the input image's native ratio regardless of
+    the aspect_ratio API parameter. Pre-cropping to 9:16 forces portrait output.
+    Returns the original path unchanged if PIL is unavailable or crop is not needed.
+    """
+    import tempfile
+    try:
+        from PIL import Image
+    except ImportError:
+        return image_path
+
+    img = Image.open(image_path)
+    src_w, src_h = img.size
+    target_ratio = target_w / target_h
+    src_ratio = src_w / src_h
+
+    if abs(src_ratio - target_ratio) < 0.02:
+        return image_path  # Already correct ratio
+
+    if src_ratio > target_ratio:
+        # Image is wider than target — crop sides
+        new_w = int(src_h * target_ratio)
+        left = (src_w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, src_h))
+    else:
+        # Image is taller than target — crop top/bottom
+        new_h = int(src_w / target_ratio)
+        top = (src_h - new_h) // 2
+        img = img.crop((0, top, src_w, top + new_h))
+
+    suffix = Path(image_path).suffix or ".jpg"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        tmp_path = f.name
+    img.save(tmp_path, quality=95)
+    return tmp_path
+
+
 def generate_ima_clip(
     image_path: str,
     motion_prompt: str,
     duration: int = 5,
     output_path: str = None,
-    last_frame_path: str = None,
     aspect_ratio: str = "9:16",
     model_id: str = None,
 ) -> dict:
     """
-    Generate a video clip using IMA Studio API.
+    Generate a video clip using IMA Studio API (image-to-video).
 
-    Supports image-to-video and first+last frame mode.
+    Pre-crops input image to the target aspect ratio so IMA outputs portrait
+    clips for 9:16 (IMA ignores the aspect_ratio API parameter in practice).
     """
     from ima_client import generate_video_clip
 
@@ -34,17 +74,28 @@ def generate_ima_clip(
         output_path = str(Path(image_path).with_suffix(".mp4"))
 
     if not model_id:
-        model_id = os.environ.get("IMA_VIDEO_MODEL", "kling-v2-6")
+        model_id = os.environ.get("IMA_VIDEO_MODEL", "wan2.6-i2v")
 
-    return generate_video_clip(
-        image_path=image_path,
-        motion_prompt=motion_prompt,
-        output_path=output_path,
-        duration=duration,
-        aspect_ratio=aspect_ratio,
-        last_frame_path=last_frame_path,
-        model_id=model_id,
-    )
+    # Pre-crop to target aspect ratio
+    target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+    cropped = _crop_to_aspect_ratio(image_path, target_w, target_h)
+    tmp_files = [cropped] if cropped != image_path else []
+
+    try:
+        return generate_video_clip(
+            image_path=cropped,
+            motion_prompt=motion_prompt,
+            output_path=output_path,
+            duration=duration,
+            aspect_ratio=aspect_ratio,
+            model_id=model_id,
+        )
+    finally:
+        for tmp in tmp_files:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -276,14 +327,14 @@ def generate_all_clips_v2(
     output_dir: str,
     aspect_ratio: str = "9:16",
     progress_callback=None,
+    narration_durations: dict[int, float] | None = None,
 ) -> list[dict]:
     """
-    Generate all AI video clips from an AI scene plan.
+    Generate all AI video clips from an AI scene plan — fully parallel.
 
-    This is the V2 pipeline that uses:
-    - First+last frame pairs for seamless scene transitions
-    - AI-written prompts (scene_plan[i]["motion_prompt"]) instead of templates
-    - Per-scene narration-driven duration
+    All IMA tasks are submitted concurrently (one thread per scene) and polled
+    simultaneously. Total wall-clock time ≈ slowest single clip (~3-5 min),
+    not N × clip time.
 
     Args:
         scene_plan: List of scene dicts from plan_scenes + write_video_prompts.
@@ -296,16 +347,21 @@ def generate_all_clips_v2(
         photo_dir: Directory containing the source photos
         output_dir: Directory to save generated clips
         aspect_ratio: Video aspect ratio
+        narration_durations: Optional {sequence: actual_audio_seconds} from TTS.
+                             When provided, clips are generated at the exact audio
+                             duration — eliminates stretch/slow-motion artifacts.
 
     Returns:
-        List of result dicts per clip
+        List of result dicts per clip, sorted by sequence.
     """
+    import math
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     import video_diagnostics
     from job_logger import get_logger, log_clip_result, log_step_end, log_step_start
 
     logger = get_logger()
     os.makedirs(output_dir, exist_ok=True)
-    results = []
     total = len(scene_plan)
     job_dir = str(Path(output_dir).parent)
 
@@ -314,52 +370,50 @@ def generate_all_clips_v2(
     log_step_start("ai_video_generation_v2", {
         "total_scenes": total,
         "aspect_ratio": aspect_ratio,
-        "mode": "first+last_frame",
+        "mode": "parallel_image_to_video",
         "engine": "ima",
     })
 
-    for i, scene in enumerate(scene_plan, 1):
+    def _generate_one(scene: dict) -> dict:
+        """Generate one clip: upload → create IMA task → poll → download."""
         seq = scene["sequence"]
         first_frame = scene["first_frame"]
         last_frame = scene.get("last_frame", first_frame)
         narration = scene.get("text_narration", "")
 
         first_path = os.path.join(photo_dir, first_frame)
-        last_path = os.path.join(photo_dir, last_frame) if last_frame != first_frame else None
         output_path = os.path.join(output_dir, f"scene_{seq:02d}.mp4")
 
-        if progress_callback:
-            progress_callback(f"Generating scene {i}/{total}: {scene.get('scene_desc', '')[:40]}...")
-
-        # Use AI-written prompt, fall back to template
         motion_prompt = scene.get("motion_prompt") or build_motion_prompt(
             room_type="other", highlights=[], style="cinematic",
         )
 
-        # Estimate duration from narration (~3.5 words/sec), clamp to 4-5s
-        # Hard cap at 5s: 6 scenes × 5s = 30s, fitting Reels sweet spot
-        if narration:
+        if narration_durations and seq in narration_durations:
+            estimated_dur = max(3, min(int(math.ceil(narration_durations[seq])), 8))
+        elif narration:
             word_count = len(narration.split())
-            estimated_dur = max(4, min(int(word_count / 3.5) + 1, 5))
+            estimated_dur = max(4, min(int(word_count / 3.0) + 1, 6))
         else:
-            estimated_dur = 4
-        attempts = []
+            estimated_dur = 5
 
-        logger.debug(
-            "Scene %d/%d: first=%s  last=%s  dur=%ds  prompt=%.80s...",
-            i, total, first_frame, last_frame, estimated_dur, motion_prompt,
+        # wan2.6-i2v accepts any duration; kling requires 5 or 10.
+        # Snap only when needed (checked inside generate_ima_clip via model_id).
+        ima_dur = estimated_dur
+
+        logger.info(
+            "Scene %02d submit: first=%s  dur=%ds  prompt=%.60s...",
+            seq, first_frame, ima_dur, motion_prompt,
         )
 
-        # Primary: IMA Studio with first+last frame
         result = generate_ima_clip(
             image_path=first_path,
             motion_prompt=motion_prompt,
-            duration=estimated_dur,
+            duration=ima_dur,
             output_path=output_path,
-            last_frame_path=last_path,
             aspect_ratio=aspect_ratio,
         )
-        attempts.append(video_diagnostics.build_attempt_record(
+
+        attempts = [video_diagnostics.build_attempt_record(
             engine="ima",
             status=result.get("status", "error"),
             result=result,
@@ -367,42 +421,8 @@ def generate_all_clips_v2(
             aspect_ratio=aspect_ratio,
             first_frame=first_frame,
             last_frame=last_frame,
-        ))
+        )]
 
-        # Fallback: Ken Burns slideshow (local ffmpeg, no API needed)
-        if result["status"] == "error":
-            logger.warning("IMA failed for scene %d: %s", i, result["message"])
-            if progress_callback:
-                progress_callback("Using Ken Burns slideshow fallback...")
-            from render_slideshow import create_ken_burns_clip
-
-            motions = ["slow_push", "pull_back", "slide_left", "slide_right"]
-            motion = motions[(i - 1) % len(motions)]
-            resolution = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
-            result = create_ken_burns_clip(
-                image_path=first_path,
-                output_path=output_path,
-                duration=float(estimated_dur),
-                motion=motion,
-                resolution=resolution,
-            )
-            if result.get("status") == "success":
-                result["engine"] = "ken_burns"
-                logger.info("  Ken Burns fallback succeeded for scene %d", i)
-            attempts.append(video_diagnostics.build_attempt_record(
-                engine="ken_burns",
-                status=result.get("status", "error"),
-                result=result,
-                requested_duration=estimated_dur,
-                aspect_ratio=aspect_ratio,
-                first_frame=first_frame,
-                last_frame=last_frame,
-            ))
-
-        result["sequence"] = seq
-        result["attempts"] = attempts
-        results.append(result)
-        log_clip_result(i, total, result)
         video_diagnostics.record_render_diagnostics(
             job_dir=job_dir,
             sequence=seq,
@@ -410,6 +430,33 @@ def generate_all_clips_v2(
             attempts=attempts,
             final_result=result,
         )
+
+        if result["status"] == "error":
+            msg = result.get("message", "unknown error")
+            logger.error("Scene %02d IMA failed: %s", seq, msg)
+            raise RuntimeError(f"IMA video generation failed for scene {seq}: {msg}")
+
+        result["sequence"] = seq
+        result["attempts"] = attempts
+        logger.info("Scene %02d done: %s", seq, result.get("video_path", ""))
+        return result
+
+    results: list[dict] = []
+    # One thread per scene — IMA is IO-bound, GIL is not a bottleneck.
+    with ThreadPoolExecutor(max_workers=total) as executor:
+        futures = {executor.submit(_generate_one, s): s["sequence"] for s in scene_plan}
+        completed = 0
+        for future in as_completed(futures):
+            seq = futures[future]
+            result = future.result()   # re-raises RuntimeError on IMA failure
+            completed += 1
+            results.append(result)
+            log_clip_result(completed, total, result)
+            if progress_callback:
+                progress_callback(f"Scene {seq:02d} done ({completed}/{total})")
+
+    # as_completed order is non-deterministic — sort for downstream assembly
+    results.sort(key=lambda r: r["sequence"])
 
     succeeded = sum(1 for r in results if r.get("status") == "success")
     log_step_end("ai_video_generation_v2", {

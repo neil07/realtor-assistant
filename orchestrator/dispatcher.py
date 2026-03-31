@@ -30,7 +30,7 @@ SCRIPTS_DIR = Path(__file__).parent.parent / "skills" / "listing-video" / "scrip
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 # Quality gate: auto-retry once if overall_score < this threshold
-AUTO_RETRY_THRESHOLD = 5
+AUTO_RETRY_THRESHOLD = 6.5
 
 # Max words per scene narration (~15 words ≈ 4s at 3.75 wps)
 # Prevents a single scene from dominating the total video duration

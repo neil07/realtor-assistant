@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -85,6 +85,10 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Reel Agent", lifespan=lifespan)
 app.mount("/output", StaticFiles(directory=str(OUTPUT_BASE)), name="output")
+
+# Operator Console
+from console.router import router as console_router
+app.include_router(console_router)
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +791,197 @@ async def manual_override(
         return {"job_id": job_id, "action": "marked_delivered"}
 
     raise HTTPException(400, f"Unknown action: {action}")
+
+
+# ---------------------------------------------------------------------------
+# Admin — Skill Brief Management
+# ---------------------------------------------------------------------------
+
+_ADMIN_HTML = """<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill Brief 管理</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          margin: 0; background: #f8f9fa; color: #212529; }}
+  .nav {{ background: #1a1a2e; color: #fff; padding: 14px 24px;
+          font-size: 15px; font-weight: 600; }}
+  .nav a {{ color: #7ec8e3; text-decoration: none; margin-left: 16px; font-weight: 400; }}
+  .container {{ max-width: 960px; margin: 32px auto; padding: 0 24px; }}
+  h2 {{ font-size: 20px; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; background: #fff;
+           box-shadow: 0 1px 4px rgba(0,0,0,.08); border-radius: 8px;
+           overflow: hidden; }}
+  th {{ background: #f1f3f5; font-size: 12px; text-transform: uppercase;
+        letter-spacing: .05em; padding: 10px 16px; text-align: left; }}
+  td {{ padding: 10px 16px; border-top: 1px solid #e9ecef; font-size: 14px; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px;
+            font-size: 11px; font-weight: 600; }}
+  .badge-custom {{ background: #d1fae5; color: #065f46; }}
+  .badge-default {{ background: #e5e7eb; color: #374151; }}
+  .btn {{ display: inline-block; padding: 5px 12px; border-radius: 6px;
+          font-size: 13px; text-decoration: none; background: #3b82f6;
+          color: #fff; }}
+  .btn:hover {{ background: #2563eb; }}
+  /* Editor page */
+  .editor-wrap {{ background: #fff; border-radius: 8px; padding: 24px;
+                  box-shadow: 0 1px 4px rgba(0,0,0,.08); }}
+  textarea {{ width: 100%; height: 520px; font-family: "SF Mono", Menlo, monospace;
+              font-size: 13px; line-height: 1.6; border: 1px solid #d1d5db;
+              border-radius: 6px; padding: 12px; box-sizing: border-box;
+              resize: vertical; }}
+  .actions {{ margin-top: 14px; display: flex; gap: 10px; align-items: center; }}
+  .btn-save {{ background: #10b981; padding: 8px 20px; font-size: 14px; }}
+  .btn-save:hover {{ background: #059669; }}
+  .btn-reset {{ background: #ef4444; padding: 8px 16px; font-size: 14px; }}
+  .btn-reset:hover {{ background: #dc2626; }}
+  .toast {{ display:none; padding: 8px 16px; border-radius: 6px; font-size: 13px;
+            background: #d1fae5; color: #065f46; }}
+</style>
+</head>
+<body>
+<div class="nav">🎬 Reel Agent Admin
+  <a href="/admin">经纪人列表</a>
+  <a href="/">测试界面</a>
+</div>
+{body}
+<script>
+async function saveSkill(phone, skillType) {{
+  const content = document.getElementById('editor').value;
+  const res = await fetch(`/admin/agents/${{phone}}/skills/${{skillType}}`, {{
+    method: 'PUT',
+    headers: {{'Content-Type': 'text/plain'}},
+    body: content,
+  }});
+  const toast = document.getElementById('toast');
+  if (res.ok) {{
+    toast.style.display = 'inline';
+    toast.textContent = '✅ 已保存';
+    setTimeout(() => toast.style.display = 'none', 2500);
+  }} else {{
+    toast.style.background = '#fee2e2'; toast.style.color = '#991b1b';
+    toast.style.display = 'inline';
+    toast.textContent = '❌ 保存失败';
+  }}
+}}
+async function resetSkill(phone, skillType) {{
+  if (!confirm('确定恢复为全局默认 Brief？当前内容会丢失。')) return;
+  const res = await fetch(`/admin/agents/${{phone}}/skills/${{skillType}}/reset`, {{method: 'POST'}});
+  if (res.ok) location.reload();
+}}
+</script>
+</body>
+</html>"""
+
+
+def _require_admin(request: Request) -> None:
+    """Simple token auth for admin routes. Skip check if ADMIN_TOKEN not set."""
+    token = os.environ.get("ADMIN_TOKEN", "")
+    if not token:
+        return  # No token configured — open access (dev mode)
+    auth = request.headers.get("Authorization", "")
+    if auth != f"Bearer {token}":
+        raise HTTPException(403, "Invalid or missing admin token")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_list_agents(request: Request):
+    """Admin UI: list all agents and their Skill brief status."""
+    _require_admin(request)
+    import profile_manager
+
+    briefs = await asyncio.to_thread(profile_manager.list_skill_briefs)
+    # Also include agents that have profiles but no custom brief yet
+    all_profiles = []
+    profiles_dir = Path(__file__).parent / "skills" / "listing-video" / "profiles"
+    for p in sorted(profiles_dir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text())
+            all_profiles.append(data.get("phone", p.stem))
+        except Exception:
+            pass
+
+    brief_index = {b["phone"]: b for b in briefs}
+    rows = ""
+    for phone in all_profiles:
+        safe = profile_manager._safe_phone(phone)
+        b = brief_index.get(safe, {})
+        is_custom = b.get("is_customized", False)
+        badge = ('<span class="badge badge-custom">已定制</span>' if is_custom
+                 else '<span class="badge badge-default">使用默认</span>')
+        edit_url = f"/admin/agents/{phone}/skills/video/edit"
+        rows += f"<tr><td>{phone}</td><td>video</td><td>{badge}</td><td><a class='btn' href='{edit_url}'>编辑 Brief</a></td></tr>"
+
+    body = f"""
+    <div class="container">
+      <h2>经纪人 Skill Brief 管理</h2>
+      <table>
+        <thead><tr><th>手机号</th><th>Skill</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>"""
+    return _ADMIN_HTML.format(body=body)
+
+
+@app.get("/admin/agents/{phone}/skills/{skill_type}/edit", response_class=HTMLResponse)
+async def admin_edit_skill_ui(phone: str, skill_type: str, request: Request):
+    """Admin UI: edit a specific agent's Skill brief in the browser."""
+    _require_admin(request)
+    import profile_manager
+
+    content = await asyncio.to_thread(profile_manager.get_skill_brief, phone, skill_type)
+    escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    body = f"""
+    <div class="container">
+      <h2>编辑 Skill Brief — {phone} / {skill_type}</h2>
+      <div class="editor-wrap">
+        <textarea id="editor">{escaped}</textarea>
+        <div class="actions">
+          <button class="btn btn-save" onclick="saveSkill('{phone}','{skill_type}')">保存</button>
+          <button class="btn btn-reset" onclick="resetSkill('{phone}','{skill_type}')">恢复默认</button>
+          <span id="toast" class="toast"></span>
+        </div>
+      </div>
+    </div>"""
+    return _ADMIN_HTML.format(body=body)
+
+
+@app.get("/admin/agents/{phone}/skills/{skill_type}")
+async def admin_get_skill(phone: str, skill_type: str, request: Request):
+    """API: return the raw Markdown content of an agent's Skill brief."""
+    _require_admin(request)
+    import profile_manager
+
+    content = await asyncio.to_thread(profile_manager.get_skill_brief, phone, skill_type)
+    return {"phone": phone, "skill_type": skill_type, "content": content}
+
+
+@app.put("/admin/agents/{phone}/skills/{skill_type}", status_code=204)
+async def admin_update_skill(phone: str, skill_type: str, request: Request):
+    """API: overwrite an agent's Skill brief with plain-text Markdown body."""
+    _require_admin(request)
+    import profile_manager
+
+    content = (await request.body()).decode("utf-8")
+    if not content.strip():
+        raise HTTPException(400, "Brief content cannot be empty")
+    await asyncio.to_thread(profile_manager.update_skill_brief, phone, content, skill_type)
+
+
+@app.post("/admin/agents/{phone}/skills/{skill_type}/reset", status_code=204)
+async def admin_reset_skill(phone: str, skill_type: str, request: Request):
+    """API: reset an agent's Skill brief to the global default."""
+    _require_admin(request)
+    import profile_manager
+
+    default_path = (Path(__file__).parent / "skills" / "listing-video"
+                    / "prompts" / "creative_director.md")
+    if not default_path.exists():
+        raise HTTPException(404, "Global default brief not found")
+    content = default_path.read_text()
+    await asyncio.to_thread(profile_manager.update_skill_brief, phone, content, skill_type)
 
 
 # ---------------------------------------------------------------------------
