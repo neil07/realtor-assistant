@@ -11,6 +11,7 @@ runwayml>=0.9.0
 
 # Web server (test UI)
 fastapi>=0.115.0
+jinja2>=3.1.0
 uvicorn>=0.32.0
 python-multipart>=0.0.12
 

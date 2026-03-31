@@ -51,6 +51,7 @@ _scheduler = None
 # Lifespan: init DB + dispatcher, resume pending jobs on startup
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global _job_mgr, _dispatcher
@@ -88,12 +89,14 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_BASE)), name="output")
 
 # Operator Console
 from console.router import router as console_router
+
 app.include_router(console_router)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _get_job_mgr():
     if _job_mgr is None:
@@ -190,6 +193,7 @@ def _load_review_summary(output_dir: str | None) -> dict | None:
 # ---------------------------------------------------------------------------
 # Test UI
 # ---------------------------------------------------------------------------
+
 
 @app.get("/", response_class=HTMLResponse)
 async def upload_page():
@@ -506,6 +510,7 @@ function showResult(data) {
 # API: Async generate (returns job_id immediately)
 # ---------------------------------------------------------------------------
 
+
 @app.post("/api/generate")
 async def generate_video(
     photos: list[UploadFile] = File(...),
@@ -559,6 +564,7 @@ async def generate_video(
 # API: Job status
 # ---------------------------------------------------------------------------
 
+
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
     """Poll job status with delivery, review, and diagnostics summaries."""
@@ -579,9 +585,10 @@ async def get_status(job_id: str):
 # Webhook: OpenClaw inbound
 # ---------------------------------------------------------------------------
 
+
 class WebhookPayload(BaseModel):
     agent_phone: str
-    photo_paths: list[str]            # paths to photos already saved on disk
+    photo_paths: list[str]  # paths to photos already saved on disk
     params: dict = {}
     callback_url: str | None = None
     openclaw_msg_id: str | None = None
@@ -590,8 +597,374 @@ class WebhookPayload(BaseModel):
 class FeedbackPayload(BaseModel):
     job_id: str
     agent_phone: str
-    feedback_text: str                # raw text from WhatsApp ("换个更活泼的音乐")
+    feedback_text: str  # raw text from WhatsApp ("换个更活泼的音乐")
     revision_round: int = 1
+
+
+class MessagePayload(BaseModel):
+    """Universal text-message entry — works on channels with or without buttons."""
+
+    agent_phone: str
+    text: str = ""
+    has_media: bool = False
+    media_paths: list[str] = []
+    callback_url: str | None = None
+    openclaw_msg_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Message UX: universal text-command router (button-free channels)
+# ---------------------------------------------------------------------------
+
+# Text-command lookup — works as first-class fallback when channel has no buttons
+_STYLE_KEYWORDS = {
+    "elegant": "elegant",
+    "优雅": "elegant",
+    "✨": "elegant",
+    "professional": "professional",
+    "专业": "professional",
+    "💼": "professional",
+    "energetic": "energetic",
+    "活力": "energetic",
+    "🔥": "energetic",
+}
+_CONFIRM_KEYWORDS = {
+    "go",
+    "ok",
+    "yes",
+    "done",
+    "sure",
+    "confirm",
+    "确认",
+    "好的",
+    "开始",
+    "好",
+    "可以",
+}
+_SKIP_KEYWORDS = {"skip", "pass", "跳过", "不用", "no"}
+_PUBLISH_KEYWORDS = {"publish", "post", "发布", "send", "发"}
+_ADJUST_KEYWORDS = {"adjust", "change", "tweak", "调整", "改", "修改"}
+_REDO_KEYWORDS = {"redo", "again", "remake", "重做", "重来"}
+_STOP_PUSH_KEYWORDS = {"stop", "unsubscribe", "no more", "停止推送", "不要了", "取消推送"}
+_START_PUSH_KEYWORDS = {"resume push", "start push", "恢复推送", "继续推", "重新订阅"}
+_HELP_KEYWORDS = {"help", "?", "帮助", "怎么用", "what can you do"}
+_DAILY_INSIGHT_KEYWORDS = {
+    "daily insight",
+    "insight",
+    "market insight",
+    "daily update",
+    "market update",
+    "每日资讯",
+    "每日洞察",
+    "市场洞察",
+    "今日资讯",
+    "今日洞察",
+}
+_PROPERTY_CONTENT_KEYWORDS = {
+    "listing",
+    "open house",
+    "just listed",
+    "new listing",
+    "property",
+    "photos",
+    "房源",
+    "房子",
+    "楼盘",
+    "开放日",
+    "看房",
+    "照片",
+}
+_PROPERTY_HINT_WORDS = {
+    "st",
+    "street",
+    "rd",
+    "road",
+    "ave",
+    "avenue",
+    "blvd",
+    "drive",
+    "dr",
+    "lane",
+    "ln",
+    "court",
+    "ct",
+    "way",
+    "house",
+}
+
+# Welcome message + capability framing (first-contact)
+_WELCOME_MSG = (
+    "Hey! I'm Reel Agent 🎬\n\n"
+    "I do two things for you:\n"
+    "1. Send me listing photos → I make a video\n"
+    "2. Every morning → ready-to-post market content\n\n"
+    "To start: just send your listing photos!"
+)
+
+_WELCOME_MSG_ZH = (
+    "你好！我是 Reel Agent 🎬\n\n"
+    "我帮你做两件事：\n"
+    "1. 发房源照片给我 → 我帮你做视频\n"
+    "2. 每天早上 → 推送可直接发布的市场资讯\n\n"
+    "开始：直接发照片给我就行！"
+)
+
+
+def _looks_like_daily_insight_request(text: str) -> bool:
+    t = text.strip().lower()
+    return any(keyword in t for keyword in _DAILY_INSIGHT_KEYWORDS)
+
+
+def _looks_like_property_content_request(text: str) -> bool:
+    t = text.strip().lower()
+    if any(keyword in t for keyword in _PROPERTY_CONTENT_KEYWORDS):
+        return True
+
+    words = {word.strip(",.!?;:") for word in t.split()}
+    if any(word in words for word in _PROPERTY_HINT_WORDS):
+        return True
+
+    has_digit = any(ch.isdigit() for ch in t)
+    has_address_word = any(word in words for word in _PROPERTY_HINT_WORDS)
+    return has_digit and has_address_word
+
+
+def _classify_intent(
+    text: str,
+    has_media: bool,
+    profile: dict | None,
+    last_job: dict | None,
+) -> dict:
+    """
+    Classify user intent from raw text. Returns action dict.
+    This is the text-command fallback — every button interaction
+    has a text equivalent so buttonless channels work identically.
+    """
+    t = text.strip().lower()
+    words = set(t.split())
+
+    # 1. Media present → listing video request (asset-first)
+    if has_media:
+        return {
+            "intent": "listing_video",
+            "action": "start_video",
+            "response": "Got your photos! Let me take a look... 📸",
+        }
+
+    # 2. Style selection
+    for keyword, style in _STYLE_KEYWORDS.items():
+        if keyword in t:
+            return {
+                "intent": "style_selection",
+                "action": "set_style",
+                "style": style,
+                "response": f"Style set to {style} ✨",
+            }
+
+    # 3. Confirmation
+    if words & _CONFIRM_KEYWORDS:
+        return {
+            "intent": "confirm",
+            "action": "confirm_and_generate",
+            "response": "Starting video generation... 🎬",
+        }
+
+    # 4. Help / first-contact
+    if words & _HELP_KEYWORDS or not profile:
+        is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
+        return {
+            "intent": "first_contact" if not profile else "help",
+            "action": "welcome",
+            "response": _WELCOME_MSG_ZH if is_zh else _WELCOME_MSG,
+        }
+
+    # 5. Daily push control
+    if any(kw in t for kw in _STOP_PUSH_KEYWORDS):
+        return {
+            "intent": "stop_push",
+            "action": "disable_daily_push",
+            "response": "Daily insights paused ✅ Say 'resume push' anytime to restart.",
+        }
+    if any(kw in t for kw in _START_PUSH_KEYWORDS):
+        return {
+            "intent": "start_push",
+            "action": "enable_daily_push",
+            "response": "Daily insights resumed! You'll get tomorrow's content at 8 AM 📬",
+        }
+
+    # 6. Primary product paths: keep message routing thin and recognize these
+    # before treating free text as post-delivery revision feedback.
+    if _looks_like_daily_insight_request(t):
+        market_area = None
+        language = "en"
+        if profile:
+            content_prefs = profile.get("content_preferences", {})
+            prefs = profile.get("preferences", {})
+            market_area = content_prefs.get("market_area") or profile.get("city")
+            language = content_prefs.get("language") or prefs.get("language") or "en"
+
+        response = "Got it — I can prepare a ready-to-post daily insight for you. 📈"
+        if market_area:
+            response = f"Got it — I can prepare a ready-to-post daily insight for {market_area}. 📈"
+
+        return {
+            "intent": "daily_insight",
+            "action": "start_daily_insight",
+            "response": response,
+            "market_area": market_area,
+            "language": language,
+        }
+
+    if _looks_like_property_content_request(t):
+        return {
+            "intent": "property_content",
+            "action": "start_property_content",
+            "response": (
+                "Got it — this looks like a property content request. "
+                "Send photos when you're ready and I'll take it from there. 🏡"
+            ),
+            "awaiting": "media_or_missing_property_context",
+        }
+
+    # 7. Post-delivery actions (only when there's a recent job)
+    if last_job and last_job.get("status") == "DELIVERED":
+        if words & _PUBLISH_KEYWORDS:
+            return {
+                "intent": "publish",
+                "action": "publish",
+                "response": "Great choice! Here's your caption and hashtags 📱",
+            }
+        if words & _REDO_KEYWORDS:
+            return {
+                "intent": "redo",
+                "action": "redo",
+                "response": "Starting from scratch with your photos... 🔄",
+            }
+        if words & _ADJUST_KEYWORDS or t:
+            # Any remaining non-trivial text after delivery = revision feedback.
+            return {
+                "intent": "revision",
+                "action": "submit_feedback",
+                "feedback_text": text.strip(),
+                "response": "Got it — adjusting now... ⚡",
+            }
+
+    # 8. Off-topic
+    if t:
+        return {
+            "intent": "off_topic",
+            "action": "reject",
+            "response": (
+                "I only do listing videos and market content 📹 — send me photos or say 'help'!"
+            ),
+        }
+
+    # 10. Empty message
+    return {
+        "intent": "unknown",
+        "action": "prompt",
+        "response": "Send me listing photos to make a video, or say 'help' to see what I can do!",
+    }
+
+
+@app.post("/api/message")
+async def handle_message(payload: MessagePayload):
+    """
+    Universal message handler — text-command + intent routing.
+
+    This is the primary entry point for channels without buttons.
+    OpenClaw routes every user message here; the response tells
+    OpenClaw what to do next (show buttons, start job, etc.).
+
+    Works identically to button-based flow — every button has a
+    text equivalent so the UX is consistent across platforms.
+    """
+    import profile_manager
+
+    phone = payload.agent_phone
+    profile = await asyncio.to_thread(profile_manager.get_profile, phone)
+
+    # Find most recent job for this agent (for revision context)
+    job_mgr = _get_job_mgr()
+    last_job = None
+    try:
+        jobs = await job_mgr.list_jobs_by_phone(phone, limit=1)
+        if jobs:
+            last_job = jobs[0]
+    except Exception:
+        pass  # No jobs yet — that's fine
+
+    result = _classify_intent(payload.text, payload.has_media, profile, last_job)
+
+    # Add text-command hints for the next step (so OpenClaw can show them)
+    text_hints = _get_text_hints(result["intent"], profile)
+    result["text_commands"] = text_hints
+    result["agent_phone"] = phone
+    result["has_profile"] = profile is not None
+
+    # For listing_video intent with media: auto-start if profile has style
+    has_style = profile and profile.get("preferences", {}).get("style")
+    if result["action"] == "start_video" and has_style:
+        style = profile["preferences"]["style"]
+        result["response"] = (
+            f"Got your photos! Using your {style} style... 🎬\nVideo will be ready in ~3 min."
+        )
+        result["auto_generate"] = True
+        result["style"] = style
+    elif result["action"] == "start_video":
+        result["response"] = (
+            "Got your photos! 📸\n\n"
+            "Pick a style (type or tap):\n"
+            "• elegant ✨\n"
+            "• professional 💼\n"
+            "• energetic 🔥"
+        )
+        result["awaiting"] = "style_selection"
+
+    return result
+
+
+def _get_text_hints(
+    intent: str,
+    profile: dict | None,
+) -> dict:
+    """Return text-command hints for the next expected interaction."""
+    if intent in ("first_contact", "help"):
+        return {
+            "next": "Send listing photos to start",
+            "examples": ["(send photos)", "help", "daily insight"],
+        }
+    if intent == "daily_insight":
+        return {
+            "next": "Ask for today's market content",
+            "examples": ["daily insight", "shorter", "more professional"],
+        }
+    if intent in ("listing_video", "property_content"):
+        if profile and profile.get("preferences", {}).get("style"):
+            return {
+                "next": "Confirm or change style",
+                "examples": ["go", "elegant", "professional"],
+            }
+        return {
+            "next": "Pick a style or send photos",
+            "examples": ["elegant", "professional", "energetic", "(send photos)"],
+        }
+    if intent == "style_selection":
+        return {"next": "Confirm to start", "examples": ["go", "ok"]}
+    if intent == "confirm":
+        return {
+            "next": "Wait for video",
+            "examples": ["(processing...)"],
+        }
+    if intent in ("publish", "revision", "redo"):
+        return {
+            "next": "Send more photos or wait",
+            "examples": ["(send photos)", "help"],
+        }
+    return {
+        "next": "Send photos or say help",
+        "examples": ["(send photos)", "help"],
+    }
 
 
 @app.post("/api/daily-trigger")
@@ -632,9 +1005,7 @@ async def webhook_feedback(payload: FeedbackPayload):
     import profile_manager
 
     # 1. Classify the feedback
-    classified = await asyncio.to_thread(
-        feedback_classifier.classify, payload.feedback_text
-    )
+    classified = await asyncio.to_thread(feedback_classifier.classify, payload.feedback_text)
 
     # 2. Update agent profile with learned preference
     original_job = await job_mgr.get_job(payload.job_id)
@@ -659,6 +1030,7 @@ async def webhook_feedback(payload: FeedbackPayload):
     }
 
     import json
+
     original_params = json.loads(original_job["params"]) if original_job.get("params") else {}
 
     new_job_id = await job_mgr.create_job(
@@ -690,6 +1062,7 @@ async def get_profile(phone: str):
     If 404 → OpenClaw shows style/music selection buttons.
     """
     import profile_manager
+
     profile = await asyncio.to_thread(profile_manager.get_profile, phone)
     if not profile:
         raise HTTPException(404, "Profile not found")
@@ -758,6 +1131,7 @@ async def webhook_in(payload: WebhookPayload):
 # ---------------------------------------------------------------------------
 # Webhook: Manual override (human takeover)
 # ---------------------------------------------------------------------------
+
 
 @app.post("/webhook/manual-override/{job_id}")
 async def manual_override(
@@ -909,8 +1283,11 @@ async def admin_list_agents(request: Request):
         safe = profile_manager._safe_phone(phone)
         b = brief_index.get(safe, {})
         is_custom = b.get("is_customized", False)
-        badge = ('<span class="badge badge-custom">已定制</span>' if is_custom
-                 else '<span class="badge badge-default">使用默认</span>')
+        badge = (
+            '<span class="badge badge-custom">已定制</span>'
+            if is_custom
+            else '<span class="badge badge-default">使用默认</span>'
+        )
         edit_url = f"/admin/agents/{phone}/skills/video/edit"
         rows += f"<tr><td>{phone}</td><td>video</td><td>{badge}</td><td><a class='btn' href='{edit_url}'>编辑 Brief</a></td></tr>"
 
@@ -976,8 +1353,9 @@ async def admin_reset_skill(phone: str, skill_type: str, request: Request):
     _require_admin(request)
     import profile_manager
 
-    default_path = (Path(__file__).parent / "skills" / "listing-video"
-                    / "prompts" / "creative_director.md")
+    default_path = (
+        Path(__file__).parent / "skills" / "listing-video" / "prompts" / "creative_director.md"
+    )
     if not default_path.exists():
         raise HTTPException(404, "Global default brief not found")
     content = default_path.read_text()
@@ -990,6 +1368,7 @@ async def admin_reset_skill(phone: str, skill_type: str, request: Request):
 
 if __name__ == "__main__":
     import uvicorn
+
     print("Reel Agent Server")
     print("   Open http://localhost:8000\n")
     uvicorn.run(app, host="0.0.0.0", port=8000)
