@@ -769,8 +769,8 @@ def _classify_intent(
             "response": "Starting video generation... 🎬",
         }
 
-    # 4. Help / first-contact
-    if words & _HELP_KEYWORDS or not profile:
+    # 4. Explicit help / first-contact
+    if words & _HELP_KEYWORDS:
         is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
         return {
             "intent": "first_contact" if not profile else "help",
@@ -849,7 +849,16 @@ def _classify_intent(
                 "response": "Got it — adjusting now... ⚡",
             }
 
-    # 8. Off-topic
+    # 8. New-user empty / ambiguous input falls back to welcome
+    if not profile:
+        is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
+        return {
+            "intent": "first_contact",
+            "action": "welcome",
+            "response": _WELCOME_MSG_ZH if is_zh else _WELCOME_MSG,
+        }
+
+    # 9. Off-topic
     if t:
         return {
             "intent": "off_topic",
