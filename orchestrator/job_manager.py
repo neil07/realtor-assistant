@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_agent_phone ON jobs(agent_phone);
 CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_created_at  ON jobs(created_at);
+
+-- Callback retry queue: stores failed outbound callbacks for later retry
+CREATE TABLE IF NOT EXISTS callback_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    url         TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    attempts    INTEGER DEFAULT 0,
+    max_attempts INTEGER DEFAULT 5,
+    next_retry  REAL NOT NULL,
+    created_at  REAL NOT NULL,
+    last_error  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cbq_next_retry ON callback_queue(next_retry);
 """
 
 # Step name → column name mapping
@@ -221,6 +235,24 @@ class JobManager:
                 return json.loads(row[0])
             return None
 
+    async def add_cost(self, job_id: str, credit: float) -> None:
+        """Atomically increment cost_usd (stores IMA credits in Phase 1)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE jobs SET cost_usd = cost_usd + ?, updated_at = ? WHERE job_id = ?",
+                (credit, time.time(), job_id),
+            )
+            await db.commit()
+
+    async def get_cost(self, job_id: str) -> float:
+        """Return accumulated cost_usd for a job."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT cost_usd FROM jobs WHERE job_id = ?", (job_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return float(row[0]) if row and row[0] else 0.0
+
     async def mark_failed(
         self, job_id: str, error: str, retry_count: int | None = None
     ) -> None:
@@ -270,12 +302,13 @@ class JobManager:
                 return [dict(r) for r in rows]
 
     async def get_job_summary(self, job_id: str) -> dict | None:
-        """Lightweight job summary (no large JSON blobs)."""
+        """Lightweight job summary (includes params, excludes step output blobs)."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """SELECT job_id, agent_phone, status, current_step,
                           retry_count, last_error, cost_usd,
+                          step_started_at, params,
                           created_at, updated_at, completed_at, video_path, output_dir
                    FROM jobs WHERE job_id = ?""",
                 (job_id,),

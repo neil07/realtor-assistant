@@ -18,8 +18,7 @@ import asyncio
 import logging
 import os
 import sys
-import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -87,7 +86,7 @@ class DailyScheduler:
         Returns:
             Summary dict: {agents_processed, success, failed, skipped}
         """
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
 
         # Guard against duplicate runs on the same day
         if self._last_run_date == today:
@@ -102,6 +101,8 @@ class DailyScheduler:
         active_agents = await asyncio.to_thread(profile_manager.get_active_agents, 7)
         logger.info("DailyScheduler: %d active agents", len(active_agents))
 
+        # Filter eligible agents
+        eligible = []
         results = {"agents_processed": len(active_agents), "success": 0, "failed": 0, "skipped": 0}
 
         for agent in active_agents:
@@ -109,26 +110,88 @@ class DailyScheduler:
             if not phone:
                 results["skipped"] += 1
                 continue
-
-            # Respect agent opt-out (default: enabled)
             if not agent.get("content_preferences", {}).get("daily_push_enabled", True):
                 results["skipped"] += 1
                 continue
+            eligible.append(agent)
 
+        if not eligible:
+            logger.info("DailyScheduler: no eligible agents, done.")
+            return results
+
+        # Fetch shared data once (rates + Redfin per unique market area)
+        market_areas = [
+            a.get("content_preferences", {}).get("market_area")
+            or a.get("city", "your area")
+            for a in eligible
+        ]
+        try:
+            shared_data = await self._fetch_shared_data(market_areas)
+            logger.info(
+                "DailyScheduler: data fetched — rates=%s, markets=%d",
+                "yes" if shared_data["rates"].get("has_data") else "no",
+                sum(1 for v in shared_data["market"].values() if v.get("has_data")),
+            )
+        except Exception as exc:
+            logger.error("DailyScheduler: data fetch failed: %s", exc)
+            shared_data = {"rates": {"has_data": False}, "payment_impact": {}, "market": {}}
+
+        # Generate and push for each agent
+        for agent in eligible:
+            phone = agent["phone"]
             try:
-                await self._generate_and_push(agent)
+                await self._generate_and_push(agent, shared_data)
                 results["success"] += 1
-                logger.info("DailyScheduler: pushed insight to %s", phone)
+                logger.info("DailyScheduler: pushed Content Pack to %s", phone)
             except Exception as exc:
                 results["failed"] += 1
                 logger.error("DailyScheduler: failed for %s: %s", phone, exc)
-                # Don't raise — continue with next agent
 
         logger.info("DailyScheduler: run complete %s", results)
         return results
 
-    async def _generate_and_push(self, agent: dict) -> None:
-        """Generate insight + render images + push to agent via OpenClaw."""
+    async def _fetch_shared_data(self, market_areas: list[str]) -> dict:
+        """
+        Fetch market data shared across all agents (rates are global,
+        Redfin data is per-market). Called once per daily cycle.
+
+        Returns:
+            {
+                "rates": { ... },
+                "payment_impact": { ... },
+                "market": { "area_name": { ... }, ... }
+            }
+        """
+        import market_data_fetcher
+        import redfin_data_fetcher
+
+        # Rates are global — fetch once
+        rate_data = await asyncio.to_thread(market_data_fetcher.fetch_rates)
+        payment_impact = {}
+        if rate_data.get("has_data"):
+            payment_impact = market_data_fetcher.compute_payment_impact(rate_data)
+
+        # Redfin data is per-market — deduplicate across agents
+        unique_areas = list(set(market_areas))
+        market_cache: dict[str, dict] = {}
+        for area in unique_areas:
+            try:
+                data = await asyncio.to_thread(
+                    redfin_data_fetcher.fetch_market_data, area,
+                )
+                market_cache[area] = data
+            except Exception as exc:
+                logger.warning("Failed to fetch Redfin data for %s: %s", area, exc)
+                market_cache[area] = {"has_data": False, "error": str(exc)}
+
+        return {
+            "rates": rate_data,
+            "payment_impact": payment_impact,
+            "market": market_cache,
+        }
+
+    async def _generate_and_push(self, agent: dict, shared_data: dict) -> None:
+        """Generate Content Pack + render branded images + push to agent."""
         import generate_daily_insight
         import render_insight_image
 
@@ -136,43 +199,52 @@ class DailyScheduler:
         name = agent.get("name", "")
         content_prefs = agent.get("content_preferences", {})
         market_area = content_prefs.get("market_area") or agent.get("city", "your area")
-        language = content_prefs.get("language", "en")
         branding_colors = content_prefs.get("branding_colors")
+        brand = agent.get("brand", {})
+        agent_tagline = brand.get("tagline", "")
+        headshot_path = agent.get("headshot_path")
 
-        # 1. Generate text content
-        insight = await asyncio.to_thread(
+        # Get this agent's market data from shared cache
+        market_data = shared_data.get("market", {}).get(market_area, {})
+
+        # 1. Generate Content Pack (data-driven, agent's voice)
+        content_pack = await asyncio.to_thread(
             generate_daily_insight.generate,
-            market_area=market_area,
-            agent_name=name,
-            language=language,
+            rate_data=shared_data.get("rates"),
+            market_data=market_data,
+            payment_impact=shared_data.get("payment_impact"),
+            agent_profile=agent,
         )
 
-        # 2. Render image cards
+        # 2. Render branded image cards from Content Pack's image_data
         output_dir = str(
             Path(__file__).parent.parent
             / "skills" / "listing-video" / "output"
             / f"daily_{phone.replace('+', '')}_{date.today().isoformat()}"
         )
+        image_data = content_pack.get("image_data", {})
         image_paths = await asyncio.to_thread(
             render_insight_image.render_all_formats,
-            headline=insight["headline"],
-            body=insight["body"],
+            image_data=image_data,
+            market_area=market_area,
             agent_name=name,
             output_dir=output_dir,
+            agent_tagline=agent_tagline,
             branding_colors=branding_colors,
+            headshot_path=headshot_path,
         )
 
-        # 3. Push via notifier
+        # 3. Push full Content Pack via notifier
         await self.notifier.notify_daily_insight(
             agent_phone=phone,
-            insight=insight,
+            insight=content_pack,
             image_paths=image_paths,
             agent=agent,
         )
 
     def _seconds_until_next_trigger(self) -> float:
         """Calculate seconds until next trigger time (same or next day)."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         target = now.replace(
             hour=self.trigger_hour_utc, minute=0, second=0, microsecond=0
         )

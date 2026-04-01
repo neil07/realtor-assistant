@@ -8,6 +8,7 @@ via the CallbackClient. All methods are fire-and-forget safe.
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,6 +25,41 @@ STEP_MESSAGES = {
     "assembling":  "Assembling the final video...",
     "done":        "Your listing video is ready!",
 }
+
+
+def _normalize_daily_insight_payload(insight: dict) -> dict:
+    """Accept both flat and v2 content-pack insight shapes."""
+    briefing = insight.get("briefing") or {}
+    social = insight.get("social_post") or {}
+    meta = insight.get("_meta") or {}
+
+    headline = briefing.get("headline") or insight.get("headline", "")
+    key_numbers = briefing.get("key_numbers") or insight.get("key_numbers", "")
+    talking_points_buyers = briefing.get("talking_points_buyers") or insight.get(
+        "talking_points_buyers", []
+    )
+    talking_points_sellers = briefing.get("talking_points_sellers") or insight.get(
+        "talking_points_sellers", []
+    )
+    caption = social.get("caption") or insight.get("caption", "")
+    hashtags = social.get("hashtags") or insight.get("hashtags", [])
+    topic_type = meta.get("topic_type") or insight.get("content_type") or insight.get(
+        "topic", "unknown"
+    )
+    forward_buyer = insight.get("forward_buyer", {})
+    forward_seller = insight.get("forward_seller", {})
+
+    return {
+        "headline": headline,
+        "key_numbers": key_numbers,
+        "talking_points_buyers": talking_points_buyers,
+        "talking_points_sellers": talking_points_sellers,
+        "caption": caption,
+        "hashtags": hashtags,
+        "topic_type": topic_type,
+        "forward_buyer": forward_buyer.get("text", "") if isinstance(forward_buyer, dict) else "",
+        "forward_seller": forward_seller.get("text", "") if isinstance(forward_seller, dict) else "",
+    }
 
 
 class ProgressNotifier:
@@ -106,6 +142,174 @@ class ProgressNotifier:
             "override_url": override_url,  # ops team can click to retry/cancel
         })
 
+    async def notify_quality_blocked(
+        self,
+        job_id: str,
+        score: float,
+        top_issues: list[str],
+        job: dict,
+    ) -> None:
+        """Notify user that video quality is below delivery threshold.
+
+        Offers three choices: retry, degraded delivery, or cancel.
+        """
+        url = job.get("callback_url") or self._build_url("/events")
+        if not url:
+            logger.warning(
+                "No callback URL for job %s — quality block notification not sent (score=%.1f)",
+                job_id, score,
+            )
+            return
+
+        override_url = self._build_url(f"/webhook/manual-override/{job_id}")
+
+        await self.client.send(url, {
+            "type": "quality_blocked",
+            "job_id": job_id,
+            "openclaw_msg_id": job.get("openclaw_msg_id"),
+            "agent_phone": job.get("agent_phone"),
+            "score": score,
+            "top_issues": top_issues[:3],
+            "message": (
+                f"Video scored {score:.1f}/10 — below quality threshold. "
+                "Choose: retry (re-generate), accept (deliver as-is), or cancel."
+            ),
+            "actions": {
+                "retry_url": f"{override_url}?action=retry",
+                "accept_url": f"{override_url}?action=mark_delivered",
+                "cancel_url": f"{override_url}?action=cancel",
+            },
+        })
+
+    async def notify_stall_warning(
+        self,
+        job_id: str,
+        idle_seconds: float,
+        current_step: str,
+        job: dict,
+    ) -> None:
+        """Warn the user that a job appears stalled."""
+        url = job.get("callback_url") or self._build_url("/events")
+        if not url:
+            return
+
+        override_url = self._build_url(f"/webhook/manual-override/{job_id}")
+        minutes = int(idle_seconds / 60)
+
+        await self.client.send(url, {
+            "type": "stall_warning",
+            "job_id": job_id,
+            "openclaw_msg_id": job.get("openclaw_msg_id"),
+            "agent_phone": job.get("agent_phone"),
+            "idle_minutes": minutes,
+            "current_step": current_step,
+            "message": (
+                f"Your video has been processing for {minutes}+ minutes "
+                f"(stuck at: {current_step}). I'm still working on it — "
+                "if it takes much longer, you can retry or cancel."
+            ),
+            "actions": {
+                "retry_url": f"{override_url}?action=retry",
+                "cancel_url": f"{override_url}?action=cancel",
+            },
+        })
+
+    async def notify_photo_suggestion(
+        self,
+        job_id: str,
+        analysis: dict,
+        job: dict,
+    ) -> None:
+        """Suggest the agent add more/better photos (non-blocking advisory).
+
+        Triggered when avg quality < 6 or missing key shots detected.
+        Pipeline continues regardless — this is a nudge, not a gate.
+        """
+        url = job.get("callback_url") or self._build_url("/events")
+        if not url:
+            return
+
+        summary = analysis.get("property_summary", {})
+        photos = analysis.get("photos", [])
+
+        # Build concrete suggestions
+        suggestions = []
+        missing = summary.get("missing_shots", [])
+        if missing:
+            suggestions.append(f"Could use: {', '.join(missing[:4])}")
+
+        low_quality = [
+            p for p in photos
+            if p.get("quality_score", 10) < 5 and p.get("quality_issues")
+        ]
+        for p in low_quality[:2]:
+            room = p.get("room_type", "photo").replace("_", " ")
+            issue = p["quality_issues"][0]
+            suggestions.append(f"{room.title()}: {issue}")
+
+        if not suggestions:
+            return  # nothing actionable to suggest
+
+        await self.client.send(url, {
+            "type": "photo_suggestion",
+            "job_id": job_id,
+            "openclaw_msg_id": job.get("openclaw_msg_id"),
+            "agent_phone": job.get("agent_phone"),
+            "suggestions": suggestions,
+            "message": (
+                "Quick tip: your video is being made, but adding a few more "
+                "photos could make it even better."
+            ),
+        })
+
+    async def notify_script_preview(
+        self,
+        job_id: str,
+        script: dict,
+        scenes: list[dict],
+        job: dict,
+    ) -> None:
+        """Push script preview so the agent can see what the voiceover will say.
+
+        Non-blocking — pipeline continues immediately. Agent can send
+        feedback later to trigger a revision.
+        """
+        url = job.get("callback_url") or self._build_url("/events")
+        if not url:
+            return
+
+        scene_summary = [
+            {
+                "sequence": s.get("sequence"),
+                "room": Path(s.get("first_frame", "")).stem,
+                "narration_words": len((s.get("text_narration") or "").split()),
+            }
+            for s in scenes
+        ]
+
+        await self.client.send(url, {
+            "type": "script_preview",
+            "job_id": job_id,
+            "openclaw_msg_id": job.get("openclaw_msg_id"),
+            "agent_phone": job.get("agent_phone"),
+            "script": {
+                "hook": script.get("hook", ""),
+                "walkthrough": script.get("walkthrough", ""),
+                "closer": script.get("closer", ""),
+                "word_count": script.get("word_count", 0),
+                "estimated_duration": script.get("estimated_duration", 0),
+                "caption": script.get("caption", ""),
+            },
+            "scenes": {
+                "count": len(scenes),
+                "structure": scene_summary,
+            },
+            "message": (
+                "Here's your video script preview. "
+                "Reply with changes, or I'll keep going!"
+            ),
+        })
+
     async def notify_daily_insight(
         self,
         agent_phone: str,
@@ -114,11 +318,11 @@ class ProgressNotifier:
         agent: dict,
     ) -> None:
         """
-        Push daily market insight to OpenClaw for delivery to agent.
+        Push daily Content Pack to OpenClaw for delivery to agent.
 
         Args:
             agent_phone: Agent's WhatsApp number
-            insight: Generated insight dict (headline, body, caption, hashtags, ...)
+            insight: Content Pack dict (briefing, social_post, forward_buyer, forward_seller, image_data)
             image_paths: Dict of format_name → local file path
             agent: Full agent profile dict
         """
@@ -135,17 +339,22 @@ class ProgressNotifier:
             for fmt, path in image_paths.items()
         }
 
+        normalized = _normalize_daily_insight_payload(insight)
+
         await self.client.send(url, {
             "type": "daily_insight",
             "agent_phone": agent_phone,
             "insight": {
-                "topic": insight.get("topic", ""),
-                "headline": insight.get("headline", ""),
-                "caption": insight.get("caption", ""),
-                "hashtags": insight.get("hashtags", []),
-                "cta": insight.get("cta", ""),
-                "content_type": insight.get("content_type", "market_stat"),
+                "headline": normalized["headline"],
+                "key_numbers": normalized["key_numbers"],
+                "talking_points_buyers": normalized["talking_points_buyers"],
+                "talking_points_sellers": normalized["talking_points_sellers"],
+                "caption": normalized["caption"],
+                "hashtags": normalized["hashtags"],
+                "topic_type": normalized["topic_type"],
             },
+            "forward_buyer": normalized["forward_buyer"],
+            "forward_seller": normalized["forward_seller"],
             "image_urls": image_urls,
             "agent_name": agent.get("name", ""),
         })

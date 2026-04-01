@@ -51,6 +51,7 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 ```
 
 预期：
+
 - `intent = first_contact` 或 `help`
 - `action = welcome`
 - 有 `response`
@@ -73,6 +74,7 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 ```
 
 预期：
+
 - `intent = daily_insight`
 - `action = start_daily_insight`
 
@@ -96,6 +98,7 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 ```
 
 预期：
+
 - `intent = property_content`
 - `action = start_property_content`
 - `awaiting = media_or_missing_property_context`
@@ -118,6 +121,7 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 ```
 
 预期：
+
 - `intent = listing_video`
 - 如果 profile 有 style：
   - `auto_generate = true`
@@ -147,6 +151,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 ```
 
 预期：
+
 - 返回 `job_id`
 - 返回 `status = QUEUED`
 
@@ -169,6 +174,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
 ```
 
 预期：
+
 - 返回新的 `job_id`
 - 有 `re_run_from`
 - 有 `classified`
@@ -213,6 +219,7 @@ curl -s -X POST "$REEL_AGENT_URL/api/daily-trigger?secret=" \
 ```
 
 预期：
+
 - 返回 run summary
 - 若当前 agent 是 active 且 daily_push_enabled=true，应向 callback_url 对应的 OpenClaw 侧发送 `daily_insight` 事件
 
@@ -236,6 +243,7 @@ curl -s -X POST "$CALLBACK_URL" \
 ```
 
 预期：
+
 - `ok = true`
 - `target` 存在
 - `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json` 写入该 agent 的 `last_job_id`
@@ -243,6 +251,7 @@ curl -s -X POST "$CALLBACK_URL" \
 收到后端回调时，至少检查这些事件：
 
 ### progress
+
 - `type=progress`
 - `job_id`
 - `openclaw_msg_id`
@@ -251,6 +260,7 @@ curl -s -X POST "$CALLBACK_URL" \
 - `message`
 
 ### delivered
+
 - `type=delivered`
 - `job_id`
 - `video_url`
@@ -259,12 +269,14 @@ curl -s -X POST "$CALLBACK_URL" \
 - `aspect_ratio`
 
 ### failed
+
 - `type=failed`
 - `job_id`
 - `error`
 - `retry_count`
 
 ### daily_insight
+
 - `type=daily_insight`
 - `agent_phone`
 - `insight.headline`

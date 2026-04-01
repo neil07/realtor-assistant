@@ -16,10 +16,13 @@ Usage:
 """
 
 import asyncio
+import hmac
 import json
+import logging
 import os
 import shutil
 import sys
+import time as _time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -47,6 +50,22 @@ DEFAULT_BRIDGE_STATE_PATH = Path(
     )
 ).expanduser()
 
+# ---------------------------------------------------------------------------
+# Structured audit logger — JSON events on critical paths (auth, requests)
+# ---------------------------------------------------------------------------
+
+_audit_logger = logging.getLogger("reel_agent.audit")
+
+
+def _structured_log(event: str, **data) -> None:
+    """Emit a structured JSON log line to the audit logger.
+
+    Consumed by log aggregators (CloudWatch, Datadog, etc.) in production.
+    """
+    entry = {"event": event, "ts": _time.time(), **data}
+    _audit_logger.info(json.dumps(entry, ensure_ascii=False, default=str))
+
+
 # Lazy imports — populated in lifespan
 _job_mgr = None
 _dispatcher = None
@@ -71,12 +90,19 @@ async def lifespan(_app: FastAPI):
     _job_mgr = JobManager()
     await _job_mgr.init_db()
 
-    notifier = ProgressNotifier(CallbackClient())
+    callback_client = CallbackClient()
+    notifier = ProgressNotifier(callback_client)
     _dispatcher = Dispatcher(_job_mgr, notifier)
 
     # Start daily content scheduler as background task
     _scheduler = DailyScheduler(notifier)
     asyncio.create_task(_scheduler.run_forever())
+
+    # Start callback retry loop (flushes queued callbacks every 30s)
+    asyncio.create_task(_callback_retry_loop(callback_client))
+
+    # Start watchdog: alert if a job stalls for too long
+    asyncio.create_task(_job_watchdog_loop(_job_mgr, notifier))
 
     # Resume any jobs that were in-flight before a restart
     pending = await _job_mgr.list_pending_jobs()
@@ -85,9 +111,73 @@ async def lifespan(_app: FastAPI):
         for job in pending:
             await _dispatcher.submit(job["job_id"])
 
+    if not os.getenv("REEL_AGENT_TOKEN", "").strip():
+        _auth_logger.warning(
+            "REEL_AGENT_TOKEN not set — all auth-protected endpoints will reject requests"
+        )
+
     print("Reel Agent server ready.")
     yield
     # Graceful shutdown: running tasks will finish naturally
+
+
+_retry_logger = logging.getLogger(__name__)
+
+
+_STALL_TIMEOUT = float(os.getenv("JOB_STALL_TIMEOUT", "600"))  # 10 min default
+
+
+async def _job_watchdog_loop(
+    job_mgr: "JobManager",
+    notifier: "ProgressNotifier",
+) -> None:
+    """Background task: detect stalled jobs and warn the user every 60s."""
+    warned: set[str] = set()  # job_ids already warned (avoid spamming)
+
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = _time.time()
+            pending = await job_mgr.list_pending_jobs()
+
+            for job in pending:
+                jid = job["job_id"]
+                updated = job.get("updated_at", now)
+                idle = now - updated
+
+                if idle >= _STALL_TIMEOUT and jid not in warned:
+                    warned.add(jid)
+                    _retry_logger.warning(
+                        "Watchdog: job %s stalled %.0fs at step '%s'",
+                        jid, idle, job.get("current_step"),
+                    )
+                    await notifier.notify_stall_warning(
+                        jid,
+                        idle_seconds=idle,
+                        current_step=job.get("current_step", "unknown"),
+                        job=job,
+                    )
+
+            # Clean up warned set: remove jobs that are no longer pending
+            pending_ids = {j["job_id"] for j in pending}
+            warned &= pending_ids
+
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _retry_logger.warning("Watchdog loop error: %s", exc)
+
+
+async def _callback_retry_loop(client: "CallbackClient") -> None:
+    """Background task: flush failed callbacks from the retry queue every 30s."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await client.flush_retry_queue()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _retry_logger.warning("Callback retry loop error: %s", exc)
 
 
 app = FastAPI(title="Reel Agent", lifespan=lifespan)
@@ -95,6 +185,7 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_BASE)), name="output")
 
 # Operator Console
 from console.router import router as console_router
+from console.memory_schema import get_recommended_experience
 
 app.include_router(console_router)
 
@@ -116,17 +207,30 @@ def _get_dispatcher():
     return _dispatcher
 
 
+_auth_logger = logging.getLogger("reel_agent.auth")
+
+
 def _require_backend_auth(authorization: str | None = Header(default=None)) -> None:
-    """Protect OpenClaw-facing API routes with optional Bearer token auth."""
+    """Protect API routes with mandatory Bearer token auth.
+
+    When REEL_AGENT_TOKEN is not set the server still starts (for dev convenience)
+    but all auth-protected requests are rejected with 403.
+    """
     expected = os.getenv("REEL_AGENT_TOKEN", "").strip()
     if not expected:
-        return
+        _structured_log("auth", result="rejected", reason="token_not_configured")
+        raise HTTPException(
+            403,
+            "REEL_AGENT_TOKEN not configured — all authenticated requests are rejected",
+        )
 
     if not authorization or not authorization.startswith("Bearer "):
+        _structured_log("auth", result="rejected", reason="missing_token")
         raise HTTPException(401, "Missing bearer token")
 
     token = authorization.removeprefix("Bearer ").strip()
-    if token != expected:
+    if not hmac.compare_digest(token, expected):
+        _structured_log("auth", result="rejected", reason="invalid_token")
         raise HTTPException(401, "Invalid bearer token")
 
 
@@ -547,6 +651,7 @@ async def generate_video(
     music: str = Form("modern"),
     aspect_ratio: str = Form("9:16"),
     language: str = Form("en"),
+    _auth: None = Depends(_require_backend_auth),
 ):
     """Upload photos and queue a video generation job. Returns job_id immediately."""
     job_mgr = _get_job_mgr()
@@ -582,6 +687,16 @@ async def generate_video(
 
     await dispatcher.submit(db_job_id)
 
+    _structured_log(
+        "job_created",
+        job_id=db_job_id,
+        agent_phone=agent_phone or "test",
+        photo_count=len(photos),
+        style=style,
+        aspect_ratio=aspect_ratio,
+        language=language,
+    )
+
     return {"job_id": db_job_id, "status": "QUEUED"}
 
 
@@ -592,13 +707,41 @@ async def generate_video(
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    """Poll job status with delivery, review, and diagnostics summaries."""
+    """Poll job status with delivery, review, diagnostics, and timing info."""
     job_mgr = _get_job_mgr()
     summary = await job_mgr.get_job_summary(job_id)
     if not summary:
         raise HTTPException(404, "Job not found")
 
     resp = dict(summary)
+    now = _time.time()
+    is_terminal = summary.get("status") in ("DELIVERED", "FAILED", "CANCELLED")
+
+    # ── Timing ──────────────────────────────────────────────────────
+    created = summary.get("created_at", now)
+    completed = summary.get("completed_at")
+    resp["elapsed_seconds"] = max(0, round((completed or now) - created, 1))
+
+    step_started = summary.get("step_started_at")
+    if step_started and not is_terminal:
+        resp["step_elapsed_seconds"] = max(0, round(now - step_started, 1))
+    else:
+        resp["step_elapsed_seconds"] = None
+
+    resp.pop("step_started_at", None)
+
+    # ── Params summary (non-sensitive subset) ───────────────────────
+    resp["params_summary"] = None
+    if raw_params := summary.get("params"):
+        try:
+            p = json.loads(raw_params) if isinstance(raw_params, str) else raw_params
+            if isinstance(p, dict):
+                resp["params_summary"] = {k: p.get(k) for k in ("style", "aspect_ratio", "language")}
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+    resp.pop("params", None)
+
+    # ── Video URL + enrichments ────────────────────────────────────
     if summary.get("video_path"):
         resp["video_url"] = _video_url(summary["video_path"])
     resp["diagnostics"] = _load_diagnostics_summary(summary.get("output_dir"))
@@ -689,12 +832,47 @@ _START_PUSH_KEYWORDS = {
     "重新订阅",
 }
 _HELP_KEYWORDS = {"help", "?", "帮助", "怎么用", "what can you do"}
+_APP_QUESTION_KEYWORDS = {
+    "is this an app",
+    "what is this",
+    "how do i use this",
+    "how does this work",
+    "what do you do",
+}
+_TRUST_QUESTION_KEYWORDS = {
+    "secure",
+    "security",
+    "safe",
+    "spam",
+    "legit",
+    "legitimate",
+}
+_PRICING_QUESTION_KEYWORDS = {
+    "how much",
+    "how much per month",
+    "per month",
+    "price",
+    "pricing",
+    "cost",
+}
+_FIRST_STEP_QUESTION_KEYWORDS = {
+    "first step",
+    "where do i start",
+    "what should i do first",
+    "tell me the first step",
+    "don't know these tools",
+    "do not know these tools",
+}
 _DAILY_INSIGHT_KEYWORDS = {
     "daily insight",
     "insight",
     "market insight",
     "daily update",
     "market update",
+    "daily content",
+    "market content",
+    "content for today",
+    "content today",
     "每日资讯",
     "每日洞察",
     "市场洞察",
@@ -733,6 +911,11 @@ _PROPERTY_HINT_WORDS = {
     "house",
 }
 
+_SUPPORTED_DAILY_INSIGHT_REFINEMENTS = {
+    "shorter",
+    "more professional",
+}
+
 # Welcome message + capability framing (first-contact)
 _WELCOME_MSG = (
     "Hey! I'm Reel Agent 🎬\n\n"
@@ -763,6 +946,39 @@ def _looks_like_help_request(text: str) -> bool:
     return any(keyword in t for keyword in _HELP_KEYWORDS if " " in keyword)
 
 
+def _normalize_command_text(text: str) -> str:
+    return text.strip().lower().strip(" \t\r\n.,!?;:")
+
+
+def _contains_any_phrase(text: str, keywords: set[str]) -> bool:
+    t = _normalize_command_text(text)
+    return any(keyword in t for keyword in keywords)
+
+
+def _match_style_selection(text: str) -> str | None:
+    normalized = _normalize_command_text(text)
+    for keyword, style in _STYLE_KEYWORDS.items():
+        if normalized == keyword:
+            return style
+    return None
+
+
+def _looks_like_app_question(text: str) -> bool:
+    return _contains_any_phrase(text, _APP_QUESTION_KEYWORDS)
+
+
+def _looks_like_trust_question(text: str) -> bool:
+    return _contains_any_phrase(text, _TRUST_QUESTION_KEYWORDS)
+
+
+def _looks_like_pricing_question(text: str) -> bool:
+    return _contains_any_phrase(text, _PRICING_QUESTION_KEYWORDS)
+
+
+def _looks_like_first_step_question(text: str) -> bool:
+    return _contains_any_phrase(text, _FIRST_STEP_QUESTION_KEYWORDS)
+
+
 def _looks_like_daily_insight_request(text: str) -> bool:
     t = text.strip().lower()
     return any(keyword in t for keyword in _DAILY_INSIGHT_KEYWORDS)
@@ -782,19 +998,49 @@ def _looks_like_property_content_request(text: str) -> bool:
     return has_digit and has_address_word
 
 
+def _build_starter_task(recommended_path: str) -> dict | None:
+    if recommended_path == "insight_first":
+        return {
+            "label": "Reply daily insight",
+            "command": "daily insight",
+        }
+    if recommended_path == "interview_first":
+        return {
+            "label": "Answer one quick question",
+            "command": "tell me the first step",
+        }
+    return {
+        "label": "Send 6-10 listing photos",
+        "command": "(send photos)",
+    }
+
+
+def _infer_recommended_path(intent: str, profile: dict | None) -> str:
+    if profile:
+        return get_recommended_experience(profile)["recommended_path"]
+    if intent in {"daily_insight", "daily_insight_refinement"}:
+        return "insight_first"
+    return "video_first"
+
+
 def _read_bridge_agent_state(agent_phone: str) -> dict | None:
     """Best-effort read of the OpenClaw bridge state for post-render controls."""
     try:
         raw = json.loads(DEFAULT_BRIDGE_STATE_PATH.read_text("utf-8"))
     except Exception:
+        _structured_log("bridge_state_read", agent_phone=agent_phone, result="file_error")
         return None
 
     agents = raw.get("agents")
     if not isinstance(agents, dict):
+        _structured_log("bridge_state_read", agent_phone=agent_phone, result="no_agents")
         return None
 
     agent_state = agents.get(agent_phone)
-    return agent_state if isinstance(agent_state, dict) else None
+    if not isinstance(agent_state, dict):
+        _structured_log("bridge_state_read", agent_phone=agent_phone, result="not_found")
+        return None
+    return agent_state
 
 
 def _parse_iso_dt(value: str | None) -> datetime | None:
@@ -848,6 +1094,15 @@ def _classify_intent(
     bridge_agent_state: dict | None = None,
 ) -> dict:
     """
+    [TEST-ONLY in production] Keyword-based intent classifier.
+
+    In production, OpenClaw's Router Skill handles intent routing directly
+    (calling /webhook/in, /webhook/feedback etc. without going through here).
+    This function exists for local testing and as a reference implementation
+    of the routing rules that should be replicated in the OpenClaw Router Skill.
+
+    See DECISIONS.md D9 for the architectural rationale.
+
     Classify user intent from raw text. Returns action dict.
     This is the text-command fallback — every button interaction
     has a text equivalent so buttonless channels work identically.
@@ -864,34 +1119,49 @@ def _classify_intent(
             "response": "Got your photos! Let me take a look... 📸",
         }
 
-    # 2. Style selection
-    for keyword, style in _STYLE_KEYWORDS.items():
-        if keyword in t:
-            return {
-                "intent": "style_selection",
-                "action": "set_style",
-                "style": style,
-                "response": f"Style set to {style} ✨",
-            }
-
-    # 3. Confirmation
-    if words & _CONFIRM_KEYWORDS:
+    # 2. Trust-first entry questions.
+    if _looks_like_app_question(t):
         return {
-            "intent": "confirm",
-            "action": "confirm_and_generate",
-            "response": "Starting video generation... 🎬",
+            "intent": "app_question",
+            "action": "explain_use",
+            "response": (
+                "No app install needed. Just chat with me here: send 6-10 listing photos "
+                "for a video, or say 'daily insight' for a ready-to-post market update."
+            ),
         }
 
-    # 4. Explicit help / first-contact
-    if _looks_like_help_request(t):
-        is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
+    if _looks_like_trust_question(t):
         return {
-            "intent": "first_contact" if not profile else "help",
-            "action": "welcome",
-            "response": _WELCOME_MSG_ZH if is_zh else _WELCOME_MSG,
+            "intent": "trust_question",
+            "action": "reassure_trust",
+            "response": (
+                "Fair question. I only use the photos and requests you send here to make listing "
+                "videos or market content. Safest first try: send 6-10 listing photos and you'll "
+                "see exactly what comes back."
+            ),
         }
 
-    # 5. Daily push control
+    if _looks_like_pricing_question(t):
+        return {
+            "intent": "pricing_question",
+            "action": "explain_pricing",
+            "response": (
+                "I don't quote plan pricing inside this chat yet. The fastest way to evaluate it "
+                "is to try one starter task first: send 6-10 listing photos, or say 'daily insight'."
+            ),
+        }
+
+    if _looks_like_first_step_question(t):
+        return {
+            "intent": "first_step_question",
+            "action": "recommend_starter_task",
+            "response": (
+                "Start with one simple task: send 6-10 listing photos. "
+                "If I still need your style, I'll ask one quick follow-up."
+            ),
+        }
+
+    # 3. Daily push control
     if any(kw in t for kw in _STOP_PUSH_KEYWORDS):
         return {
             "intent": "stop_push",
@@ -905,7 +1175,7 @@ def _classify_intent(
             "response": "Daily insights resumed! You'll get tomorrow's content at 8 AM 📬",
         }
 
-    # 6. Primary product paths: keep message routing thin and recognize these
+    # 4. Primary product paths: keep message routing thin and recognize these
     # before treating free text as post-delivery revision feedback.
     if _looks_like_daily_insight_request(t):
         market_area = None
@@ -939,7 +1209,7 @@ def _classify_intent(
             "awaiting": "media_or_missing_property_context",
         }
 
-    # 7. Post-render actions.
+    # 5. Post-render actions.
     if post_render_context == "daily_insight":
         if words & _PUBLISH_KEYWORDS:
             return {
@@ -952,6 +1222,13 @@ def _classify_intent(
                 "intent": "skip",
                 "action": "skip",
                 "response": "Skipped this daily insight. We can use the next one instead. ⏭️",
+            }
+        if t:
+            return {
+                "intent": "daily_insight_refinement",
+                "action": "refine_daily_insight",
+                "feedback_text": text.strip(),
+                "response": "Got it — refining this daily insight now. ✍️",
             }
 
     if post_render_context == "delivered":
@@ -976,7 +1253,34 @@ def _classify_intent(
                 "response": "Got it — adjusting now... ⚡",
             }
 
-    # 8. New-user empty / ambiguous input falls back to welcome
+    # 6. Style selection
+    style = _match_style_selection(t)
+    if style:
+            return {
+                "intent": "style_selection",
+                "action": "set_style",
+                "style": style,
+                "response": f"Style set to {style} ✨",
+            }
+
+    # 7. Confirmation
+    if words & _CONFIRM_KEYWORDS:
+        return {
+            "intent": "confirm",
+            "action": "confirm_and_generate",
+            "response": "Starting video generation... 🎬",
+        }
+
+    # 8. Explicit help / first-contact
+    if _looks_like_help_request(t):
+        is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
+        return {
+            "intent": "first_contact" if not profile else "help",
+            "action": "welcome",
+            "response": _WELCOME_MSG_ZH if is_zh else _WELCOME_MSG,
+        }
+
+    # 9. New-user empty / ambiguous input falls back to welcome
     if not profile:
         is_zh = any(ord(c) > 0x4E00 for c in t) if t else False
         return {
@@ -985,7 +1289,7 @@ def _classify_intent(
             "response": _WELCOME_MSG_ZH if is_zh else _WELCOME_MSG,
         }
 
-    # 9. Off-topic
+    # 10. Off-topic
     if t:
         return {
             "intent": "off_topic",
@@ -995,7 +1299,7 @@ def _classify_intent(
             ),
         }
 
-    # 10. Empty message
+    # 11. Empty message
     return {
         "intent": "unknown",
         "action": "prompt",
@@ -1004,19 +1308,28 @@ def _classify_intent(
 
 
 @app.post("/api/message")
+@app.post("/api/router-test")
 async def handle_message(
     payload: MessagePayload,
     _auth: None = Depends(_require_backend_auth),
 ):
     """
-    Universal message handler — text-command + intent routing.
+    [TEST-ONLY in production] Universal message + intent routing endpoint.
 
-    This is the primary entry point for channels without buttons.
-    OpenClaw routes every user message here; the response tells
-    OpenClaw what to do next (show buttons, start job, etc.).
+    PURPOSE (testing): Simulates what OpenClaw's Router Skill does in production.
+    Accepts a raw message, classifies intent via keyword matching, and returns
+    the action + response OpenClaw should take next. Useful for end-to-end
+    pipeline testing without a live OpenClaw connection.
 
-    Works identically to button-based flow — every button has a
-    text equivalent so the UX is consistent across platforms.
+    PRODUCTION ARCHITECTURE (D9): In production, OpenClaw's Router Skill handles
+    intent detection and calls /webhook/in or /webhook/feedback directly.
+    This endpoint is NOT in the production message path.
+
+    Routing rules (mirror these in OpenClaw Router Skill):
+      has_media            → intent: listing_video  → POST /webhook/in
+      revision after video → intent: revision       → POST /webhook/feedback
+      "daily insight"      → intent: daily_insight  → POST /api/daily-trigger
+      "stop push"          → intent: stop_push      → POST /webhook/in {action: disable_daily_push}
     """
     import profile_manager
 
@@ -1037,16 +1350,32 @@ async def handle_message(
 
     result = _classify_intent(payload.text, payload.has_media, profile, last_job, bridge_agent_state)
 
+    _structured_log(
+        "intent_classified",
+        agent_phone=phone,
+        intent=result.get("intent"),
+        action=result.get("action"),
+        has_media=payload.has_media,
+        has_profile=profile is not None,
+    )
+
     # Add text-command hints for the next step (so OpenClaw can show them)
     text_hints = _get_text_hints(result["intent"], profile)
     result["text_commands"] = text_hints
     result["agent_phone"] = phone
     result["has_profile"] = profile is not None
+    result["recommended_path"] = _infer_recommended_path(result["intent"], profile)
+    if result["intent"] in {
+        "app_question",
+        "trust_question",
+        "pricing_question",
+        "first_step_question",
+    }:
+        result["starter_task"] = _build_starter_task(result["recommended_path"])
 
-    # For listing_video intent with media: auto-start if profile has style
-    has_style = profile and profile.get("preferences", {}).get("style")
-    if result["action"] == "start_video" and has_style:
-        style = profile["preferences"]["style"]
+    # For listing_video intent with media: auto-start only when style already exists.
+    style = profile.get("preferences", {}).get("style") if profile else None
+    if result["action"] == "start_video" and style:
         result["response"] = (
             f"Got your photos! Using your {style} style... 🎬\nVideo will be ready in ~3 min."
         )
@@ -1062,6 +1391,15 @@ async def handle_message(
         )
         result["awaiting"] = "style_selection"
 
+    if profile and result.get("recommended_path"):
+        activation_updates = {
+            "activation": {"last_recommended_path": result["recommended_path"]},
+        }
+        try:
+            await asyncio.to_thread(profile_manager.update_profile, phone, activation_updates)
+        except Exception:
+            pass
+
     return result
 
 
@@ -1075,20 +1413,30 @@ def _get_text_hints(
             "next": "Send listing photos to start",
             "examples": ["(send photos)", "help", "daily insight"],
         }
+    if intent in ("app_question", "trust_question", "pricing_question", "first_step_question"):
+        return {
+            "next": "Try one clear starter task",
+            "examples": ["(send photos)", "daily insight"],
+        }
     if intent == "daily_insight":
         return {
-            "next": "Ask for today's market content",
-            "examples": ["daily insight", "shorter", "more professional"],
+            "next": "Wait for the draft, then refine or publish",
+            "examples": ["shorter", "publish", "skip"],
         }
-    if intent in ("listing_video", "property_content"):
+    if intent == "listing_video":
+        return {
+            "next": "Wait for video generation",
+            "examples": ["(processing...)"],
+        }
+    if intent == "property_content":
         if profile and profile.get("preferences", {}).get("style"):
             return {
-                "next": "Confirm or change style",
-                "examples": ["go", "elegant", "professional"],
+                "next": "Send photos or missing property details",
+                "examples": ["(send photos)", "open house this Sunday 2pm"],
             }
         return {
-            "next": "Pick a style or send photos",
-            "examples": ["elegant", "professional", "energetic", "(send photos)"],
+            "next": "Send photos or missing property details",
+            "examples": ["(send photos)", "open house this Sunday 2pm"],
         }
     if intent == "style_selection":
         return {"next": "Confirm to start", "examples": ["go", "ok"]}
@@ -1101,6 +1449,11 @@ def _get_text_hints(
         return {
             "next": "Send more photos or wait",
             "examples": ["(send photos)", "help"],
+        }
+    if intent == "daily_insight_refinement":
+        return {
+            "next": "Refine again or publish",
+            "examples": ["shorter", "more professional", "publish", "skip"],
         }
     return {
         "next": "Send photos or say help",
@@ -1287,6 +1640,7 @@ async def webhook_in(
 async def manual_override(
     job_id: str,
     action: Literal["cancel", "retry", "mark_delivered"],
+    _auth: None = Depends(_require_backend_auth),
 ):
     """
     Human takeover for stuck or failed jobs.

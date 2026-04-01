@@ -10,6 +10,19 @@ from pathlib import Path
 
 PROFILES_DIR = Path(__file__).parent.parent / "profiles"
 
+_DEFAULT_LEARNED_PATTERNS: dict = {
+    "style_confirmed": [],
+    "music_rejected": [],
+    "always_include": [],
+    "frequently_requested": [],
+}
+
+_DEFAULT_ACTIVATION: dict = {
+    "last_successful_path": "",
+    "last_recommended_path": "",
+    "first_value_seen": False,
+}
+
 
 def _profile_path(phone: str) -> Path:
     """Sanitize phone number and return profile file path."""
@@ -21,8 +34,25 @@ def get_profile(phone: str) -> dict | None:
     """Load an agent's profile. Returns None if not found."""
     path = _profile_path(phone)
     if path.exists():
-        return json.loads(path.read_text())
+        profile = json.loads(path.read_text())
+        _ensure_profile_defaults(profile)
+        return profile
     return None
+
+
+def _ensure_profile_defaults(profile: dict) -> dict:
+    """Backfill newer profile fields for older JSON records."""
+    profile.setdefault("learned_patterns", {**_DEFAULT_LEARNED_PATTERNS})
+    profile.setdefault("revision_history", [])
+    profile.setdefault("stats", {})
+    profile["stats"].setdefault("videos_created", 0)
+    profile["stats"].setdefault("first_use", datetime.now().isoformat())
+    profile["stats"].setdefault("last_use", datetime.now().isoformat())
+    profile.setdefault("activation", {**_DEFAULT_ACTIVATION})
+    profile["activation"].setdefault("last_successful_path", "")
+    profile["activation"].setdefault("last_recommended_path", "")
+    profile["activation"].setdefault("first_value_seen", False)
+    return profile
 
 
 def create_profile(
@@ -58,7 +88,7 @@ def create_profile(
         # 2.0: branding + market context
         "content_preferences": {
             "market_area": market_area or city,
-            "branding_colors": branding_colors or ["#2C3E50", "#BDC3C7"],
+            "branding_colors": branding_colors or ["#1B2A4A", "#C9A96E"],
             "language": language,
             "daily_push_enabled": True,  # opt-out via "停止每日推送"
         },
@@ -70,12 +100,13 @@ def create_profile(
             "specialty": "",
             "transaction_volume": "",
         },
-        # 2.0: personal brand
+        # 2.0: personal brand (consumed by daily insight Content Pack)
         "brand": {
-            "tone": "",
-            "tagline": "",
+            "tone": "warm + professional",  # warm/professional/casual/authoritative
+            "tagline": "",  # e.g. "Your Lehigh Valley Real Estate Expert"
             "logo_available": False,
         },
+        "headshot_path": None,  # path to agent headshot for branded images
         # 2.0: social media presence
         "social_media": {
             "platforms": [],
@@ -88,12 +119,7 @@ def create_profile(
             "trends_interest": [],
         },
         # 2.0: learned from feedback over time
-        "learned_patterns": {
-            "style_confirmed": [],       # styles agent accepted without complaint
-            "music_rejected": [],        # music moods agent has rejected
-            "always_include": [],        # elements agent always requests (e.g. "personal_photo")
-            "frequently_requested": [],  # free-form adjustments agent often asks for
-        },
+        "learned_patterns": {**_DEFAULT_LEARNED_PATTERNS},
         # 2.0: per-job revision history
         "revision_history": [],
         "market_knowledge": {},
@@ -102,9 +128,11 @@ def create_profile(
             "first_use": datetime.now().isoformat(),
             "last_use": datetime.now().isoformat(),
         },
+        "activation": {**_DEFAULT_ACTIVATION},
         "voice_clone_offered": False,
     }
 
+    _ensure_profile_defaults(profile)
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile
 
@@ -123,6 +151,7 @@ def update_profile(phone: str, updates: dict) -> dict:
                 base[k] = v
 
     deep_update(profile, updates)
+    _ensure_profile_defaults(profile)
     profile["stats"]["last_use"] = datetime.now().isoformat()
 
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
@@ -135,10 +164,11 @@ def increment_video_count(phone: str) -> int:
     if not profile:
         return 0
 
-    if "stats" not in profile:
-        profile["stats"] = {}
+    _ensure_profile_defaults(profile)
     profile["stats"]["videos_created"] = profile["stats"].get("videos_created", 0) + 1
     profile["stats"]["last_use"] = datetime.now().isoformat()
+    profile["activation"]["first_value_seen"] = True
+    profile["activation"]["last_successful_path"] = "video_first"
 
     _profile_path(phone).write_text(json.dumps(profile, indent=2))
     return profile["stats"]["videos_created"]
@@ -171,13 +201,7 @@ def record_feedback(
         return {"status": "error", "message": "Profile not found"}
 
     # Ensure 2.0 fields exist (backward-compat for older profiles)
-    profile.setdefault("learned_patterns", {
-        "style_confirmed": [],
-        "music_rejected": [],
-        "always_include": [],
-        "frequently_requested": [],
-    })
-    profile.setdefault("revision_history", [])
+    _ensure_profile_defaults(profile)
 
     # Append to revision history (keep last 20)
     profile["revision_history"].append({
@@ -225,6 +249,31 @@ def record_feedback(
     return profile
 
 
+def record_positive_signal(phone: str, style: str) -> None:
+    """Record that a video was accepted without revision — reinforce preferences.
+
+    Called when a non-retry job reaches DELIVERED status. The absence of
+    feedback is itself a signal: the agent was happy with this combination.
+
+    Args:
+        phone: Agent phone number.
+        style: Video style used (e.g. "elegant", "professional").
+    """
+    profile = get_profile(phone)
+    if not profile:
+        return
+
+    _ensure_profile_defaults(profile)
+    patterns = profile.setdefault("learned_patterns", {**_DEFAULT_LEARNED_PATTERNS})
+
+    confirmed = patterns.setdefault("style_confirmed", [])
+    if style and style not in confirmed:
+        confirmed.append(style)
+
+    profile.setdefault("stats", {})["last_use"] = datetime.now().isoformat()
+    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+
+
 def get_active_agents(days: int = 7) -> list[dict]:
     """
     Return profiles of agents who have interacted within the last N days.
@@ -241,6 +290,7 @@ def get_active_agents(days: int = 7) -> list[dict]:
     for path in PROFILES_DIR.glob("*.json"):
         try:
             profile = json.loads(path.read_text())
+            _ensure_profile_defaults(profile)
             last_use_str = profile.get("stats", {}).get("last_use", "")
             if not last_use_str:
                 continue

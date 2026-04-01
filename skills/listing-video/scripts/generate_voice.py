@@ -104,6 +104,7 @@ def generate_elevenlabs(
         "status": "success",
         "audio_path": output_path,
         "characters": len(text),
+        "credit": 0,
     }
 
 
@@ -155,6 +156,7 @@ def generate_openai_tts(
         "status": "success",
         "audio_path": output_path,
         "characters": len(text),
+        "credit": 0,
     }
 
 
@@ -348,6 +350,7 @@ def generate_scene_voiceovers(
                 "status": "success",
                 "engine": result.get("engine"),
                 "model": result.get("model"),
+                "credit": result.get("credit", 0),
                 "attempts": result.get("attempts", []),
             })
             logger.info("    -> %.1fs  %s", duration, audio_path)

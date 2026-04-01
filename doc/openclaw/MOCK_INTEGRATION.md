@@ -111,7 +111,7 @@ OpenClaw 收到用户消息后，统一先打：
      - 视频文件/URL
      - caption
      - publish / adjust / redo
-     这些按预期发回终端
+       这些按预期发回终端
 
 4. **revision 流的真实 last_job_id 绑定**
    - mock 已证实分类没问题

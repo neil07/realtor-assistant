@@ -42,6 +42,7 @@ def build_script_request(
     city: str = "",
     years: str = "10",
     photo_images: list[dict] | None = None,
+    preference_context: str = "",
 ) -> dict:
     """
     Build a Claude API request for voiceover script generation.
@@ -67,6 +68,9 @@ def build_script_request(
         agent_notes=agent_notes,
         market_context=market_context,
     )
+
+    if preference_context:
+        prompt += f"\n\n<agent_preferences>\n{preference_context}\n</agent_preferences>"
 
     # Build content: interleave labelled images then append the text prompt.
     # Claude reads images left-to-right before the instruction text, giving it

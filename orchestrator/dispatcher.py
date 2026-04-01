@@ -32,6 +32,9 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 # Quality gate: auto-retry once if overall_score < this threshold
 AUTO_RETRY_THRESHOLD = 6.5
 
+# Delivery block: best version scores below this → block delivery, notify user
+DELIVERY_BLOCK_THRESHOLD = float(os.getenv("DELIVERY_BLOCK_THRESHOLD", "4.0"))
+
 # Max words per scene narration (~15 words ≈ 4s at 3.75 wps)
 # Prevents a single scene from dominating the total video duration
 MAX_WORDS_PER_SCENE = 15
@@ -213,6 +216,7 @@ class Dispatcher:
 
         # ── Load profile ──────────────────────────────────────────────
         voice_id = None
+        profile = None
         if job["agent_phone"]:
             profile = await asyncio.to_thread(
                 profile_manager.get_profile, job["agent_phone"]
@@ -268,6 +272,25 @@ class Dispatcher:
                  f"Average photo quality very low ({avg_quality:.1f}/10)",
                  "warning"),
             ], logger)
+
+            # Advisory: suggest better/more photos (non-blocking)
+            missing_shots = analysis.get("property_summary", {}).get("missing_shots", [])
+            if avg_quality < 6 or missing_shots:
+                await self.notifier.notify_photo_suggestion(
+                    job_id, analysis, job,
+                )
+
+            # Auto-recommend style based on property analysis.
+            # Only when user left the default ("professional") and has no
+            # profile with a saved preference — respect explicit choices.
+            if params.get("style") == "professional" and not profile:
+                tier = analysis.get("property_summary", {}).get("estimated_tier", "")
+                recommended = _recommend_style(tier)
+                if recommended != "professional":
+                    params["style"] = recommended
+                    logger.info(
+                        "Auto-recommended style '%s' (tier=%s)", recommended, tier
+                    )
         else:
             analysis = parent_outputs["analysis"]
             sorted_photos = analyze_photos.sort_photos(analysis)
@@ -287,6 +310,10 @@ class Dispatcher:
                 f"Price: {params.get('price', '[TBD]')}\n"
                 f"Agent: {params.get('agent_name', '')}"
             )
+            # Inject learned preferences so Claude adapts to this agent's style
+            pref_ctx = params.get("preference_context", "")
+            if pref_ctx:
+                property_info += f"\n\n<agent_preferences>\n{pref_ctx}\n</agent_preferences>"
 
             scenes, script = await asyncio.gather(
                 asyncio.to_thread(
@@ -302,6 +329,7 @@ class Dispatcher:
                     price=params.get("price", "[TBD]"),
                     agent_name=params.get("agent_name", ""),
                     agent_phone=job["agent_phone"],
+                    preference_context=pref_ctx,
                 ),
             )
 
@@ -346,6 +374,12 @@ class Dispatcher:
                  f"{empty_narrations}/{len(scenes)} scenes have no narration text",
                  "warning"),
             ], logger)
+
+            # Script preview: let the agent see what the voiceover will say
+            # Sent after quality gate so any warnings are already logged.
+            await self.notifier.notify_script_preview(
+                job_id, script, scenes, job,
+            )
         else:
             scenes = parent_outputs["scenes"]
             script = parent_outputs["script"]
@@ -360,6 +394,11 @@ class Dispatcher:
         # Skip if revision starts at PRODUCING (reuse parent's prompts)
         if re_run_from in ("ANALYZING", "SCRIPTING") or "prompts" not in parent_outputs:
             await self.job_mgr.update_status(job_id, "PROMPTING", "write_prompts")
+            await self.notifier.notify_progress(
+                job_id, "prompting",
+                f"Planning camera moves for {len(scenes)} scenes...",
+                job,
+            )
             logger.log_step_start("write_prompts", {"scene_count": len(scenes)})
 
             prompts = await asyncio.to_thread(
@@ -399,6 +438,11 @@ class Dispatcher:
 
         # ── Step 4: render_ai_video ‖ generate_voice (parallel) ──────
         await self.job_mgr.update_status(job_id, "PRODUCING", "render_and_voice")
+        await self.notifier.notify_progress(
+            job_id, "producing",
+            f"Rendering {len(scenes)} AI video clips + voiceover (this takes ~2 min)...",
+            job,
+        )
         logger.log_step_start("producing", {"parallel": True, "re_run_from": re_run_from})
 
         clips_dir = os.path.join(output_dir, "clips")
@@ -425,9 +469,20 @@ class Dispatcher:
 
         await self.job_mgr.save_step_output(job_id, "clips", clips)
         await self.job_mgr.save_step_output(job_id, "narrations", narrations)
+
+        # Aggregate IMA credits from render + TTS
+        step4_credit = (
+            sum(c.get("credit", 0) for c in clips)
+            + sum(n.get("credit", 0) for n in narrations)
+        )
+        if step4_credit > 0:
+            await self.job_mgr.add_cost(job_id, step4_credit)
+            logger.info("Step 4 cost: %.1f IMA credits (cumulative)", step4_credit)
+
         logger.log_step_end("producing", {
             "clips": len(clips),
             "narrations": len(narrations),
+            "cost_credit": step4_credit,
         })
 
         # Gate: after Step 4
@@ -458,6 +513,11 @@ class Dispatcher:
 
         # ── Step 5: Assemble ──────────────────────────────────────────
         await self.job_mgr.update_status(job_id, "ASSEMBLING", "assemble")
+        await self.notifier.notify_progress(
+            job_id, "assembling",
+            f"Assembling final video ({len(successful_clips)} clips + audio)...",
+            job,
+        )
         logger.log_step_start("assemble")
 
         music_path = _find_music(
@@ -515,14 +575,24 @@ class Dispatcher:
         # ── Step 7: Auto-retry if quality gate fails (max 1 retry) ───
         # Retry conditions: score < threshold OR no audio stream
         # Only retry once; reuse script+prompts, re-run render+TTS+assemble.
+        # Cost guard: skip retry if accumulated cost already exceeds limit.
+        COST_LIMIT_CREDIT = float(os.getenv("JOB_COST_LIMIT_CREDIT", "200"))
+        accumulated_cost = await self.job_mgr.get_cost(job_id)
+
         is_retry = params.get("_auto_retry", False)
         needs_retry = (
             not is_retry
+            and accumulated_cost < COST_LIMIT_CREDIT
             and (
                 review_result.get("overall_score", 10) < AUTO_RETRY_THRESHOLD
                 or not review_result.get("deliverable", True)
             )
         )
+        if not is_retry and accumulated_cost >= COST_LIMIT_CREDIT:
+            logger.warning(
+                "Cost limit reached (%.1f >= %.1f credits) — skipping auto-retry",
+                accumulated_cost, COST_LIMIT_CREDIT,
+            )
 
         if needs_retry:
             score_v1 = review_result.get("overall_score", 0)
@@ -558,6 +628,15 @@ class Dispatcher:
                 ),
             )
 
+            # Track retry cost
+            retry_credit = (
+                sum(c.get("credit", 0) for c in clips_v2)
+                + sum(n.get("credit", 0) for n in narrations_v2)
+            )
+            if retry_credit > 0:
+                await self.job_mgr.add_cost(job_id, retry_credit)
+                logger.info("Retry cost: %.1f IMA credits", retry_credit)
+
             result_v2 = await asyncio.to_thread(
                 assemble_final.full_assembly_v2,
                 scene_plan=scenes,
@@ -591,6 +670,46 @@ class Dispatcher:
                 result = result_v2
                 review_result = review_v2
 
+        # ── Delivery gate: block if score < threshold ─────────────────
+        final_score = review_result.get("overall_score", 10)
+        final_deliverable = review_result.get("deliverable", True)
+        is_blocked = (
+            final_score < DELIVERY_BLOCK_THRESHOLD
+            or (not final_deliverable and final_score < AUTO_RETRY_THRESHOLD)
+        )
+
+        if is_blocked:
+            logger.warning(
+                "Quality gate BLOCKED delivery: score=%.1f (threshold=%.1f), deliverable=%s",
+                final_score, DELIVERY_BLOCK_THRESHOLD, final_deliverable,
+            )
+            await self.job_mgr.update_status(
+                job_id, "FAILED",
+                current_step="quality_blocked",
+                video_path=video_path,
+                completed_at=time.time(),
+                retry_count=0,  # Don't auto-retry via retry_handler
+            )
+
+            final_cost = await self.job_mgr.get_cost(job_id)
+            logger.log_job_summary({
+                "status": "quality_blocked",
+                "video_path": video_path,
+                "scene_count": len(scenes),
+                "overall_score": final_score,
+                "deliverable": final_deliverable,
+                "auto_retried": needs_retry,
+                "cost_credit": final_cost,
+            })
+
+            await self.notifier.notify_quality_blocked(
+                job_id,
+                score=final_score,
+                top_issues=review_result.get("top_issues", []),
+                job=job,
+            )
+            return
+
         # ── Deliver ───────────────────────────────────────────────────
         await self.job_mgr.update_status(
             job_id, "DELIVERED",
@@ -599,6 +718,7 @@ class Dispatcher:
             completed_at=time.time(),
         )
 
+        final_cost = await self.job_mgr.get_cost(job_id)
         logger.log_job_summary({
             "status": "success",
             "video_path": video_path,
@@ -606,19 +726,45 @@ class Dispatcher:
             "word_count": script.get("word_count", 0),
             "style": params.get("style"),
             "aspect_ratio": params.get("aspect_ratio"),
-            "overall_score": review_result.get("overall_score"),
-            "deliverable": review_result.get("deliverable"),
+            "overall_score": final_score,
+            "deliverable": final_deliverable,
             "audio_warning": result.get("audio_warning"),
             "auto_retried": needs_retry,
+            "cost_credit": final_cost,
         })
 
-        # Update profile stats
+        # Update profile stats + positive feedback signal
         if job["agent_phone"]:
             await asyncio.to_thread(
                 profile_manager.increment_video_count, job["agent_phone"]
             )
+            # No parent = first attempt accepted without revision → reinforce style
+            if not job.get("parent_job_id"):
+                await asyncio.to_thread(
+                    profile_manager.record_positive_signal,
+                    job["agent_phone"],
+                    params.get("style", "professional"),
+                )
 
-        await self.notifier.notify_delivered(job_id, {**result, "review": review_result}, job)
+        await self.notifier.notify_delivered(job_id, {
+            **result,
+            "review": review_result,
+            "caption": script.get("caption", ""),
+        }, job)
+
+
+def _recommend_style(estimated_tier: str) -> str:
+    """Map property tier from photo analysis to a video style.
+
+    Only used when the user didn't explicitly choose a style and has no
+    profile preference — acts as a smart default.
+    """
+    tier = (estimated_tier or "").lower().replace(" ", "_")
+    if tier in ("luxury", "ultra_luxury"):
+        return "elegant"
+    if tier in ("starter", "investment"):
+        return "energetic"
+    return "professional"
 
 
 def _cap_words(text: str, max_words: int = MAX_WORDS_PER_SCENE) -> str:

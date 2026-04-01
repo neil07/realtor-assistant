@@ -36,6 +36,12 @@ POLL_INTERVAL = 8           # seconds
 
 logger = logging.getLogger(__name__)
 
+# ─── Upload Cache (process-level) ─────────────────────────────────────────────
+# Key: md5 of file content → Value: CDN URL.
+# Avoids re-uploading the same photo within a process lifetime.
+# Not persisted: IMA CDN URLs may expire across restarts.
+_upload_cache: dict[str, str] = {}
+
 
 # ─── Auth & Upload ─────────────────────────────────────────────────────────────
 
@@ -61,6 +67,9 @@ def upload_image(image_path: str, api_key: str) -> str:
     """
     Upload a local image to IMA CDN.
 
+    Uses a process-level content-hash cache so the same image (even at
+    different paths, e.g. after re-crop or auto-retry) is uploaded only once.
+
     Args:
         image_path: Local file path to image.
         api_key: IMA API key.
@@ -71,6 +80,13 @@ def upload_image(image_path: str, api_key: str) -> str:
     Raises:
         RuntimeError: If upload fails.
     """
+    image_bytes = Path(image_path).read_bytes()
+    content_md5 = hashlib.md5(image_bytes).hexdigest()
+
+    if content_md5 in _upload_cache:
+        logger.debug("Upload cache hit: %s (md5=%s)", image_path, content_md5[:8])
+        return _upload_cache[content_md5]
+
     ext = Path(image_path).suffix.lstrip(".").lower() or "jpeg"
     content_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
 
@@ -92,10 +108,11 @@ def upload_image(image_path: str, api_key: str) -> str:
     if not ful or not fdl:
         raise RuntimeError(f"Upload token missing ful/fdl: {token_data}")
 
-    image_bytes = Path(image_path).read_bytes()
     put_resp = requests.put(ful, data=image_bytes, headers={"Content-Type": content_type}, timeout=60)
     put_resp.raise_for_status()
-    logger.debug("Uploaded %s → %s", image_path, fdl[:60])
+
+    _upload_cache[content_md5] = fdl
+    logger.debug("Uploaded %s → %s (cached md5=%s)", image_path, fdl[:60], content_md5[:8])
     return fdl
 
 
@@ -355,6 +372,7 @@ def generate_video_clip(
             "engine": "ima",
             "model": model_id,
             "task_id": task_id,
+            "credit": model_params.get("credit", 0),
         }
 
     try:
@@ -413,6 +431,7 @@ def generate_tts(
             "audio_path": output_path,
             "characters": len(text),
             "model": model_id,
+            "credit": model_params.get("credit", 0),
         }
 
     except Exception as e:

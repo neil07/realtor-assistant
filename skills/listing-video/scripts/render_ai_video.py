@@ -10,6 +10,9 @@ import os
 import sys
 from pathlib import Path
 
+# Ken Burns fallback motion cycle
+_KEN_BURNS_MOTIONS = ["slow_push", "pull_back", "slide_left", "slide_right"]
+
 # ---------------------------------------------------------------------------
 # IMA Studio — primary engine
 # ---------------------------------------------------------------------------
@@ -290,8 +293,7 @@ def generate_all_clips(
                 progress_callback("Using Ken Burns slideshow fallback...")
             from render_slideshow import create_ken_burns_clip
 
-            motions = ["slow_push", "pull_back", "slide_left", "slide_right"]
-            motion = motions[(i - 1) % len(motions)]
+            motion = _KEN_BURNS_MOTIONS[(i - 1) % len(_KEN_BURNS_MOTIONS)]
             resolution = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
             result = create_ken_burns_clip(
                 image_path=photo_path,
@@ -375,7 +377,7 @@ def generate_all_clips_v2(
     })
 
     def _generate_one(scene: dict) -> dict:
-        """Generate one clip: upload → create IMA task → poll → download."""
+        """Generate one clip: IMA primary → Ken Burns fallback on failure."""
         seq = scene["sequence"]
         first_frame = scene["first_frame"]
         last_frame = scene.get("last_frame", first_frame)
@@ -423,6 +425,37 @@ def generate_all_clips_v2(
             last_frame=last_frame,
         )]
 
+        # Fallback: Ken Burns slideshow if IMA fails (local ffmpeg, no API cost)
+        if result["status"] == "error":
+            msg = result.get("message", "unknown error")
+            logger.warning(
+                "Scene %02d IMA failed: %s — falling back to Ken Burns", seq, msg,
+            )
+            from render_slideshow import create_ken_burns_clip
+
+            motion = _KEN_BURNS_MOTIONS[(seq - 1) % len(_KEN_BURNS_MOTIONS)]
+            resolution = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+            result = create_ken_burns_clip(
+                image_path=first_path,
+                output_path=output_path,
+                duration=float(estimated_dur),
+                motion=motion,
+                resolution=resolution,
+            )
+            if result.get("status") == "success":
+                result["engine"] = "ken_burns"
+
+            attempts.append(video_diagnostics.build_attempt_record(
+                engine="ken_burns",
+                status=result.get("status", "error"),
+                result=result,
+                requested_duration=estimated_dur,
+                aspect_ratio=aspect_ratio,
+                first_frame=first_frame,
+                last_frame=last_frame,
+            ))
+
+        # Record diagnostics once, after potential fallback
         video_diagnostics.record_render_diagnostics(
             job_dir=job_dir,
             sequence=seq,
@@ -431,14 +464,10 @@ def generate_all_clips_v2(
             final_result=result,
         )
 
-        if result["status"] == "error":
-            msg = result.get("message", "unknown error")
-            logger.error("Scene %02d IMA failed: %s", seq, msg)
-            raise RuntimeError(f"IMA video generation failed for scene {seq}: {msg}")
-
         result["sequence"] = seq
         result["attempts"] = attempts
-        logger.info("Scene %02d done: %s", seq, result.get("video_path", ""))
+        logger.info("Scene %02d done: engine=%s  path=%s",
+                     seq, result.get("engine", "?"), result.get("video_path", ""))
         return result
 
     results: list[dict] = []
@@ -448,7 +477,11 @@ def generate_all_clips_v2(
         completed = 0
         for future in as_completed(futures):
             seq = futures[future]
-            result = future.result()   # re-raises RuntimeError on IMA failure
+            try:
+                result = future.result()
+            except Exception as exc:
+                logger.error("Scene %02d crashed: %s", seq, exc)
+                result = {"sequence": seq, "status": "error", "message": str(exc)}
             completed += 1
             results.append(result)
             log_clip_result(completed, total, result)

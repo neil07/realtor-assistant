@@ -4,19 +4,13 @@
 
 name: reel-agent-backend
 description: |
-  Connect to Reel Agent backend for universal message routing,
-  property-content kickoff, listing-video generation, revision feedback,
-  and daily insight push control.
+Connect to Reel Agent backend for universal message routing,
+property-content kickoff, listing-video generation, revision feedback,
+and daily insight push control.
 trigger: user sends any message; always route through /api/message first
 requires:
-  env:
-    - REEL_AGENT_URL
-    - REEL_AGENT_TOKEN
-    - AGENT_PHONE
-    - CALLBACK_URL
-  bins:
-    - curl
-    - jq
+env: - REEL_AGENT_URL - REEL_AGENT_TOKEN - AGENT_PHONE - CALLBACK_URL
+bins: - curl - jq
 
 ---
 
@@ -50,14 +44,14 @@ Do not use:
 
 **Graduation routing contract:**
 
-| Input | New user | Returning user |
-| --- | --- | --- |
-| `help` | `first_contact` / `welcome` | `help` / `welcome` |
-| `what can you do?` | `first_contact` / `welcome` | `help` / `welcome` |
-| `daily insight` | `daily_insight` / `start_daily_insight` | `daily_insight` / `start_daily_insight` |
+| Input                                    | New user                                      | Returning user                                |
+| ---------------------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `help`                                   | `first_contact` / `welcome`                   | `help` / `welcome`                            |
+| `what can you do?`                       | `first_contact` / `welcome`                   | `help` / `welcome`                            |
+| `daily insight`                          | `daily_insight` / `start_daily_insight`       | `daily_insight` / `start_daily_insight`       |
 | `123 Main St open house this Sunday 2pm` | `property_content` / `start_property_content` | `property_content` / `start_property_content` |
-| `stop push` | `stop_push` / `disable_daily_push` | `stop_push` / `disable_daily_push` |
-| `resume push` | `resume_push` / `enable_daily_push` | `resume_push` / `enable_daily_push` |
+| `stop push`                              | `stop_push` / `disable_daily_push`            | `stop_push` / `disable_daily_push`            |
+| `resume push`                            | `resume_push` / `enable_daily_push`           | `resume_push` / `enable_daily_push`           |
 
 **Decision tree:**
 
