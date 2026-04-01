@@ -277,8 +277,8 @@ def test_webhook_in_generation_path_creates_job_and_submits(monkeypatch) -> None
 
 
 def test_webhook_feedback_refines_daily_insight_and_repushes_callback(monkeypatch, tmp_path) -> None:
-    import profile_manager
     import generate_daily_insight
+    import profile_manager
     import render_insight_image
 
     monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")

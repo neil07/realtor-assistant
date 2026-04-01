@@ -60,7 +60,7 @@ _scheduler = None
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global _job_mgr, _dispatcher
+    global _job_mgr, _dispatcher, _scheduler
 
     from agent.callback_client import CallbackClient
     from orchestrator.daily_scheduler import DailyScheduler
@@ -1158,6 +1158,7 @@ async def webhook_feedback(
     import generate_daily_insight
     import profile_manager
     import render_insight_image
+
     from agent.callback_client import CallbackClient
     from orchestrator.progress_notifier import _make_image_url
 

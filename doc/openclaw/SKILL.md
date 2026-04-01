@@ -83,6 +83,11 @@ If `style` exists, OpenClaw may skip style selection on the asset-first video pa
 
 Call after parameters are confirmed, or immediately when Skill 0 returns `auto_generate == true`.
 
+Notes:
+
+- On the Telegram/media ingress path, OpenClaw may send only the first local image path in `photo_paths`.
+- Backend derives the actual `photo_dir` from `photo_paths[0]`, so a single local path is enough to start generation.
+
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   -H "Authorization: Bearer $REEL_AGENT_TOKEN" \

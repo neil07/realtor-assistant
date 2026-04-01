@@ -56,6 +56,7 @@ Production API set:
 5. If user sends free text after `delivered` → call `/webhook/feedback` with `feedback_scope=video`
 6. If user sends `shorter` or `more professional` after `daily_insight` → call `/webhook/feedback` with `feedback_scope=insight`
 7. If user sends `disable_daily_push` / `enable_daily_push` intent → call `/webhook/in` with `params.action` set to that value
+8. On the listing-photo path, OpenClaw only needs the first local image path; backend derives `photo_dir` from `photo_paths[0]` and scans the directory
 
 **Callback contract note:**
 
