@@ -87,6 +87,28 @@ Output JSON only:
 }"""
 
 
+REFINE_SYSTEM_PROMPT = """You are refining an existing daily real estate social post.
+
+Rules:
+- Keep the same core market idea unless the feedback clearly asks to change emphasis
+- Respect the user's instruction precisely
+- If feedback says 'shorter', make headline/body/caption tighter while keeping the meaning
+- If feedback says 'more professional', make tone more polished and confident, but not salesy
+- Preserve factual caution: do not invent specific numbers or claims
+- Write in the same language as the original unless the feedback explicitly asks otherwise
+
+Output JSON only:
+{
+  "topic": "one-line topic description",
+  "headline": "catchy headline (max 10 words)",
+  "body": "main content (max 150 words)",
+  "caption": "social media caption with headline + body + CTA (max 200 words)",
+  "hashtags": ["list", "of", "5-8", "relevant", "hashtags"],
+  "content_type": "market_stat|buyer_tip|seller_tip|neighborhood|weekend_wrap",
+  "cta": "call to action line"
+}"""
+
+
 def build_insight_request(
     market_area: str,
     agent_name: str = "",
@@ -166,6 +188,71 @@ def generate(
     result.setdefault("content_type", content_type or CONTENT_CALENDAR[datetime.now().weekday()])
     result.setdefault("cta", "Comment below or DM me with questions!")
 
+    return result
+
+
+def build_refine_insight_request(
+    current_insight: dict,
+    feedback_text: str,
+    agent_name: str = "",
+) -> dict:
+    """Build a Claude request that refines an existing insight."""
+    original = {
+        "topic": current_insight.get("topic", ""),
+        "headline": current_insight.get("headline", ""),
+        "body": current_insight.get("body", ""),
+        "caption": current_insight.get("caption", ""),
+        "hashtags": current_insight.get("hashtags", []),
+        "content_type": current_insight.get("content_type", "market_stat"),
+        "cta": current_insight.get("cta", ""),
+    }
+    user_prompt = (
+        "Refine this existing daily insight based on the feedback.\n\n"
+        f"Feedback: {feedback_text}\n\n"
+        f"Current insight JSON:\n{json.dumps(original, ensure_ascii=False, indent=2)}"
+    )
+    if agent_name:
+        user_prompt += f"\n\nAgent name: {agent_name}"
+
+    return {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 512,
+        "system": REFINE_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+
+
+def refine(current_insight: dict, feedback_text: str, agent_name: str = "") -> dict:
+    """Refine an existing daily insight post based on user feedback."""
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    request = build_refine_insight_request(current_insight, feedback_text, agent_name)
+
+    response = client.messages.create(**request)
+    raw = response.content[0].text.strip()
+
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        result = {
+            "topic": current_insight.get("topic", "Daily Market Insight"),
+            "headline": current_insight.get("headline", "Market Insight"),
+            "body": current_insight.get("body", "")[:300],
+            "caption": raw[:400] or current_insight.get("caption", ""),
+            "hashtags": current_insight.get("hashtags", []),
+            "content_type": current_insight.get("content_type", "market_stat"),
+            "cta": current_insight.get("cta", "Comment below or DM me with questions!"),
+        }
+
+    result.setdefault("topic", current_insight.get("topic", "Daily Market Insight"))
+    result.setdefault("content_type", current_insight.get("content_type", "market_stat"))
+    result.setdefault("hashtags", current_insight.get("hashtags", []))
+    result.setdefault("cta", current_insight.get("cta", "Comment below or DM me with questions!"))
     return result
 
 

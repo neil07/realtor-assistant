@@ -73,3 +73,13 @@
 - **原因：** 单一 TTS 引擎的可用性不够。IMA Studio TTS 偶发失败；ElevenLabs 质量好但贵；OpenAI TTS 最便宜做兜底
 - **影响：** generate_voice.py 按顺序尝试三个引擎；profile 可锁定特定引擎（voice clone 场景）
 - **出处：** skills/listing-video/scripts/generate_voice.py
+
+---
+
+### D9: 生产态意图识别归 OpenClaw Router Skill，`/api/message` 降级为 test-only baseline
+
+- **时间：** 2026-04-02
+- **原因：** 思远要求端到端体验完整产品流程，且生产态意图识别本就应该位于 OpenClaw；此前 `/api/message` 主要用于测试与基线验证，不应继续承担生产主入口
+- **影响：** 生产态由 OpenClaw Router Skill 直接判定 trust-first / property-content / listing-video / revision / daily-insight / push-control 等路径；后端生产 API 以 `/api/profile/{phone}`、`/webhook/in`、`/webhook/feedback`、`/api/daily-trigger` 为主；`/api/message` 保留给测试 / 回归 / 对照验证
+- **补充：** daily insight follow-up 扩展为 `publish / skip / shorter / more professional`；其中 `shorter / more professional` 通过 `/webhook/feedback` 的 insight refinement 模式承接，不新增第 5 个生产 API
+- **出处：** 2026-04-02 思远拍板 + `MINI_HANDOFF.md` + 本轮 D9 重构实施

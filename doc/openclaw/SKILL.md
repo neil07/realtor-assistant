@@ -4,10 +4,10 @@
 
 name: reel-agent-backend
 description: |
-  Connect to Reel Agent backend for universal message routing,
+  Connect to Reel Agent backend for OpenClaw-directed production routing,
   property-content kickoff, listing-video generation, revision feedback,
-  and daily insight push control.
-trigger: user sends any message; always route through /api/message first
+  daily insight refinement, and daily insight push control.
+trigger: user sends any message; production intent is classified by the OpenClaw Router Skill
 requires:
   env:
     - REEL_AGENT_URL
@@ -20,23 +20,12 @@ requires:
 
 ---
 
-## Skill 0: Route Message (ALWAYS call first)
+## Skill 0: Production Routing (Router Skill-owned)
 
-Every user message — text, photos, button taps — goes through this endpoint.
-It keeps routing thin: `/api/message` only classifies the lane and tells OpenClaw what to do next.
+Production routing is now owned by the OpenClaw Router Skill.
+Use the backend APIs below directly from OpenClaw after the Router Skill decides the lane.
 
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "'"$USER_TEXT"'",
-    "has_media": '$HAS_MEDIA',
-    "media_paths": ['$MEDIA_PATHS_JSON'],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }'
-```
+`/api/message` is still available as a regression oracle during testing, but it is not the production entrypoint.
 
 `CALLBACK_URL` is the Reel Agent business-event callback target owned by the OpenClaw side.
 In this project the default shape is `POST http://127.0.0.1:18789/reel-agent/events`,
@@ -125,9 +114,9 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 
 ---
 
-## Skill 3: Submit Revision Feedback
+## Skill 3: Submit Feedback
 
-Call when Skill 0 returns `action: "submit_feedback"`.
+Video revision after `delivered`:
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
@@ -137,11 +126,27 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
     "job_id": "'"$LAST_JOB_ID"'",
     "agent_phone": "'"$AGENT_PHONE"'",
     "feedback_text": "'"$FEEDBACK_TEXT"'",
-    "revision_round": '"$REVISION_ROUND"'
+    "revision_round": '"$REVISION_ROUND"',
+    "feedback_scope": "video"
   }'
 ```
 
-Update `last_job_id` if the backend returns a new revision job id.
+Daily insight refinement after `daily_insight` render:
+
+```bash
+curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
+  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_phone": "'"$AGENT_PHONE"'",
+    "feedback_text": "shorter",
+    "feedback_scope": "insight",
+    "callback_url": "'"$CALLBACK_URL"'"
+  }'
+```
+
+For `feedback_scope=insight`, backend will refine the latest insight object and can re-push a fresh `daily_insight` callback.
+Update `last_job_id` if the backend returns a new video revision job id.
 
 ---
 
@@ -225,7 +230,7 @@ Current concrete implementation: local plugin route `POST /reel-agent/events`.
 **Post-delivery UX:**
 
 - For `delivered`: `publish / adjust / redo`
-- For `daily_insight`: `publish / skip`
+- For `daily_insight`: `publish / skip / shorter / more professional`
 - For `failed`: ask user to resend photos or retry later
 - If `openclaw_msg_id` is present, bridge should prefer `openclaw_msg_id -> Telegram target`
 - If `openclaw_msg_id` is absent, bridge may fall back to `agent_phone -> Telegram DM target`

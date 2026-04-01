@@ -4,25 +4,19 @@ Behavior rules for the Reel Agent OpenClaw instance.
 
 ---
 
-## Message Routing (Universal Entry)
+## Message Routing (Production Contract)
 
-**Every user message goes through `POST $REEL_AGENT_URL/api/message` first.**
+**Production traffic is classified by the OpenClaw Router Skill first.**
 
-This endpoint handles thin intent classification and returns the action + response text.
-It works identically on button-enabled and text-only channels.
+`POST $REEL_AGENT_URL/api/message` remains available as a test-only baseline and regression oracle,
+but it is no longer the production entrypoint.
 
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "'"$USER_TEXT"'",
-    "has_media": '$HAS_MEDIA',
-    "media_paths": ['$MEDIA_PATHS_JSON'],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }'
-```
+Production API set:
+
+- `GET $REEL_AGENT_URL/api/profile/{phone}`
+- `POST $REEL_AGENT_URL/webhook/in`
+- `POST $REEL_AGENT_URL/webhook/feedback`
+- `POST $REEL_AGENT_URL/api/daily-trigger`
 
 **Response examples:**
 
@@ -55,13 +49,13 @@ curl -s -X POST "$REEL_AGENT_URL/api/message" \
 
 **OpenClaw behavior:**
 
-1. Send `response` to user
-2. If `auto_generate` is true → call `/webhook/in` immediately
-3. If `action == "start_daily_insight"` → keep the request in the daily-insight lane; do not downgrade it to off-topic
-4. If `action == "start_property_content"` → keep the user in the unified property-content lane and wait for photos or richer property assets on the next message
-5. If `action == "disable_daily_push"` or `"enable_daily_push"` → call `/webhook/in` with `params.action` set to that value
-6. If `awaiting` is set → wait for next user message, then route through `/api/message` again
-7. Always include `text_commands.examples` as button labels when the channel supports buttons
+1. Router Skill decides the lane directly from user input
+2. If listing photos arrive and profile already has style → call `/webhook/in` immediately
+3. If style is missing → ask for style, then wait for `go / ok / yes`
+4. If user asks for `daily insight` → keep the request in the daily-insight lane and trigger the daily content path
+5. If user sends free text after `delivered` → call `/webhook/feedback` with `feedback_scope=video`
+6. If user sends `shorter` or `more professional` after `daily_insight` → call `/webhook/feedback` with `feedback_scope=insight`
+7. If user sends `disable_daily_push` / `enable_daily_push` intent → call `/webhook/in` with `params.action` set to that value
 
 **Callback contract note:**
 
@@ -103,10 +97,12 @@ These inputs must stay stable for both new users and returning users.
 | `confirm` | `go`, `ok`, `yes`, `done` | Start video generation | Processing |
 | `daily_insight` | `daily insight`, market update text | Acknowledge and enter daily-insight flow | Generate insight |
 | `property_content` | Listing / open house / address text | Acknowledge and wait for photos or assets | Collect media |
-| `revision` | Free text after DELIVERED job | Submit as feedback | Re-processing |
-| `publish` | `publish`, `post` after delivery | Provide caption + hashtags | Done |
+| `revision` | Free text after DELIVERED job | Submit as video feedback | Re-processing |
+| `publish` | `publish`, `post` after delivery or insight | Publish the current object | Done |
 | `redo` | `redo`, `again` after delivery | Restart from scratch | Processing |
 | `skip` | `skip`, `pass` after daily insight delivery | Skip this insight | Done |
+| `insight_refine_shorter` | `shorter` after daily insight delivery | Submit as insight feedback | Re-render insight |
+| `insight_refine_professional` | `more professional` after daily insight delivery | Submit as insight feedback | Re-render insight |
 | `stop_push` | `stop push`, `pause push`, `no more` | Disable daily insights | Confirmed |
 | `resume_push` | `resume push`, `start push` | Re-enable daily insights | Confirmed |
 | `off_topic` | Unrelated question | Rejection line + redirect | Wait for photos |
@@ -174,7 +170,7 @@ If profile has no style:
 }
 ```
 
-OpenClaw should deliver the branded image + caption and offer `publish / skip`.
+OpenClaw should deliver the branded image + caption and offer `publish / skip / shorter / more professional`.
 
 ---
 
@@ -193,7 +189,7 @@ Bot: "Got it — adjusting now... ⚡"
 
 - Do **not** store style/music preferences in OpenClaw — backend profile is source of truth
 - Do store: user's name, preferred language, and `last_job_id` for revision matching
-- Do also read `lastDailyInsight` from bridge state when handling `publish / skip` after a daily insight render
+- Do also read `lastDailyInsight` from bridge state when handling `publish / skip / shorter / more professional` after a daily insight render
 - `last_job_id` is now **structured bridge state first**, session memory second
 - Preferred read source: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
 - Session memory for `last_job_id`: keep only as a lightweight fallback
