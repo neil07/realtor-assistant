@@ -55,7 +55,7 @@
 | `doc/prelaunch-experience/mock-output-packs.json`             | 模拟输出结果包                             | 现行 |
 | `doc/prelaunch-experience/scoring-template.csv`               | 统一评分模板                               | 现行 |
 | `doc/prelaunch-experience/scoring-2026-04-01.csv`             | 2026-04-01 场景评分结果                    | 现行 |
-| `tools/run_dialogue_eval.py`                                  | 真实 `/api/message` 批量压测脚本           | 现行 |
+| `tools/run_dialogue_eval.py`                                  | test-only `/api/message` 批量压测脚本      | 现行 |
 | `tools/run_prelaunch_audit.py`                                | 预上线体检执行脚本                         | 现行 |
 
 ---

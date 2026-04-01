@@ -1,6 +1,6 @@
 # OpenClaw 真实联调脚本（Reel Agent 2.0）
 
-> 目的：按当前真实接线契约，逐步验证 OpenClaw ↔ Reel Agent 的消息路由、任务触发、回调、revision、daily trigger。
+> 目的：按 D9 之后的真实接线契约，验证 OpenClaw Router Skill 是否直接调用生产 API，而不是把生产流量交给 `/api/message`。
 
 ## 0. 环境变量
 
@@ -14,123 +14,24 @@ export CALLBACK_URL="$OPENCLAW_CALLBACK_BASE_URL/events"
 export MSG_ID=test-msg-001
 ```
 
-`CALLBACK_URL` is the OpenClaw-side business-event bridge for Reel Agent callbacks.
+---
 
-Do not use:
-
-- Telegram transport webhook paths such as `/telegram-webhook`
-- `"$OPENCLAW_GATEWAY_URL"/api/sessions/main/messages`
-
-Bridge auth:
+## 1. 先查 profile
 
 ```bash
--H "X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET"
+curl -s -X GET "$REEL_AGENT_URL/api/profile/$AGENT_PHONE" \
+  -H "Authorization: Bearer $REEL_AGENT_TOKEN" | jq
 ```
 
-所有受保护接口都要带：
+确认：
 
-```bash
--H "Authorization: Bearer $REEL_AGENT_TOKEN"
-```
+- 有没有 style
+- readiness 如何
+- OpenClaw 应该推视频、资讯还是先做 interview-first
 
 ---
 
-## 1. help / 首触达
-
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "help",
-    "has_media": false,
-    "media_paths": [],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }' | jq
-```
-
-预期：
-
-- `intent = first_contact` 或 `help`
-- `action = welcome`
-- 有 `response`
-
----
-
-## 2. Daily Insight 文本触发
-
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "daily insight",
-    "has_media": false,
-    "media_paths": [],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }' | jq
-```
-
-预期：
-
-- `intent = daily_insight`
-- `action = start_daily_insight`
-
-注意：这里当前只验证路由和 OpenClaw 编排入口，不直接创建后台 job。
-
----
-
-## 3. Property Content 文本触发
-
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "123 Main St open house this Sunday 2pm",
-    "has_media": false,
-    "media_paths": [],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }' | jq
-```
-
-预期：
-
-- `intent = property_content`
-- `action = start_property_content`
-- `awaiting = media_or_missing_property_context`
-
----
-
-## 4. 发图 → listing video 路由
-
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/message" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "text": "",
-    "has_media": true,
-    "media_paths": ["/tmp/job-1/photos/front.jpg"],
-    "callback_url": "'"$CALLBACK_URL"'"
-  }' | jq
-```
-
-预期：
-
-- `intent = listing_video`
-- 如果 profile 有 style：
-  - `auto_generate = true`
-- 如果 profile 没 style：
-  - `awaiting = style_selection`
-
----
-
-## 5. 触发后台生成（OpenClaw → /webhook/in）
+## 2. 发图走视频主链路
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
@@ -157,7 +58,7 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 
 ---
 
-## 6. revision（OpenClaw → /webhook/feedback）
+## 3. revision 走反馈链路
 
 ```bash
 export LAST_JOB_ID=replace-with-real-job-id
@@ -181,7 +82,21 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
 
 ---
 
-## 7. daily push 开关
+## 4. daily insight 走 daily trigger
+
+```bash
+curl -s -X POST "$REEL_AGENT_URL/api/daily-trigger?secret=" \
+  -H "Authorization: Bearer $REEL_AGENT_TOKEN" | jq
+```
+
+预期：
+
+- scheduler run once
+- OpenClaw bridge 收到 `daily_insight`
+
+---
+
+## 5. daily push 开关
 
 ### disable
 
@@ -211,99 +126,40 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
 
 ---
 
-## 8. 手动触发 daily scheduler
+## 6. Callback 验证清单
 
-```bash
-curl -s -X POST "$REEL_AGENT_URL/api/daily-trigger?secret=" \
-  -H "Authorization: Bearer $REEL_AGENT_TOKEN" | jq
-```
+OpenClaw bridge 必须能消费：
 
-预期：
+- `progress`
+- `delivered`
+- `failed`
+- `daily_insight`
+- `onboarding_form`
+- `form_completed`
 
-- 返回 run summary
-- 若当前 agent 是 active 且 daily_push_enabled=true，应向 callback_url 对应的 OpenClaw 侧发送 `daily_insight` 事件
+### `daily_insight` 关键字段
 
----
+收到 callback 后先检查：
 
-## 9. OpenClaw 侧回调验收项
-
-### 9.0 bridge smoke test
-
-```bash
-curl -s -X POST "$CALLBACK_URL" \
-  -H "Content-Type: application/json" \
-  -H "X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET" \
-  -d '{
-    "type": "progress",
-    "job_id": "smoke-job-1",
-    "agent_phone": "'"$AGENT_PHONE"'",
-    "step": "producing",
-    "message": "Smoke test from reel-agent bridge"
-  }' | jq
-```
-
-预期：
-
-- `ok = true`
-- `target` 存在
-- `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json` 写入该 agent 的 `last_job_id`
-
-收到后端回调时，至少检查这些事件：
-
-### progress
-
-- `type=progress`
-- `job_id`
-- `openclaw_msg_id`
-- `agent_phone`
-- `step`
-- `message`
-
-### delivered
-
-- `type=delivered`
-- `job_id`
-- `video_url`
-- `caption`
-- `scene_count`
-- `aspect_ratio`
-
-### failed
-
-- `type=failed`
-- `job_id`
-- `error`
-- `retry_count`
-
-### daily_insight
-
-- `type=daily_insight`
-- `agent_phone`
 - `insight.headline`
 - `insight.caption`
-- `insight.hashtags`
 - `image_urls`
 
----
-
-## 10. Telegram 放行门槛（Go / No-Go）
-
-只有下面全部满足，才通知人工去 Telegram 体验：
-
-1. OpenClaw 侧所有用户消息都先命中 `/api/message`
-2. OpenClaw 侧保存并刷新 `last_job_id`
-3. `CALLBACK_URL` 是真实可消费的业务事件入口，而不是 Telegram transport webhook
-4. OpenClaw 已能把 `progress / delivered / failed / daily_insight` 正确渲染给用户
-5. 至少完成一次 `property content -> send photos -> delivered -> adjust/redo` walkthrough
-6. 至少完成一次 `daily insight -> publish/skip` walkthrough
-
-若任一项缺失，则保持 No-Go，只继续项目侧施工或接线。
+缺任何一个都不应直接发给用户。
 
 ---
 
-## 11. 当前高风险检查点
+## 7. test-only baseline
 
-1. OpenClaw 是否真的把所有用户消息先打 `/api/message`
-2. `callback_url` 是否真实落到 OpenClaw 可消费的事件入口
-3. OpenClaw 是否保存并传回最近一次 `job_id` 用于 revision
-4. delivered / daily_insight 到用户端的最终渲染是否符合产品预期
+如果要验证本地路由桩，而不是生产主链路，可单独调用：
+
+- `POST /api/message`
+- `POST /api/router-test`
+
+用途仅限：
+
+- prelaunch 审计
+- regression baseline
+- no-OpenClaw 本地联调
+
+不要把这一步当成生产联调必经节点。
