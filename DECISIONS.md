@@ -73,3 +73,16 @@
 - **原因：** 单一 TTS 引擎的可用性不够。IMA Studio TTS 偶发失败；ElevenLabs 质量好但贵；OpenAI TTS 最便宜做兜底
 - **影响：** generate_voice.py 按顺序尝试三个引擎；profile 可锁定特定引擎（voice clone 场景）
 - **出处：** skills/listing-video/scripts/generate_voice.py
+
+---
+
+### D9: Intent Routing 归 OpenClaw Router Skill，`/api/message` 降级为测试入口
+
+- **时间：** 2026-04-01
+- **原因：** 当前架构存在双层意图识别——OpenClaw（LLM，真正理解自然语言）先理解了用户意图，再调用我们后端的 `/api/message`（关键词匹配）二次确认。这意味着：(1) LLM 能力被关键词层截断，复杂表达（"sellers accepted offer, help me prep content"）会被错误分类；(2) 多一个节点就多一个故障点；(3) 维护两套意图识别规则（OpenClaw system prompt + 关键词字典）
+- **影响：**
+  - **OpenClaw 侧**：在 `AGENTS.md` / `SKILL.md` 中新增 Router Skill，明确规定各场景的路由规则（has_media → `/webhook/in`，revision text → `/webhook/feedback`，etc.）
+  - **后端侧**：`/api/message` 端点保留但标记为 `[TEST-ONLY]`，生产流量不走此路径；新增 `/api/router-test` 别名供调试
+  - **生产后端只需 4 个 webhook**：`/webhook/in`、`/webhook/feedback`、`/api/profile/{phone}`、`/api/daily-trigger`
+- **时机：** P5 集成阶段——OpenClaw 入站 webhook 规格确认后实施
+- **出处：** server.py `_classify_intent()`，产品架构讨论 2026-04-01

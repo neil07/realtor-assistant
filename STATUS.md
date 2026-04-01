@@ -1,10 +1,10 @@
 # STATUS — Reel Agent
 
-> 最后更新：2026-03-30
+> 最后更新：2026-04-01
 
 ## Active Theme
 
-alpha 阶段——视频质量打磨 + 偏好记忆 + 零摩擦入口
+alpha 阶段——运营控制台 + 每日资讯管线 + 消息路由上线
 
 ## Doing
 
@@ -12,6 +12,11 @@ alpha 阶段——视频质量打磨 + 偏好记忆 + 零摩擦入口
 
 ## Done Recently
 
+- **运营控制台 `console/`** — 仪表板 + onboarding flow + H5 入驻表单 + 客户详情 + Skill Brief 在线编辑（/console 路由族）
+- **每日资讯管线** — `DailyScheduler`（UTC 13:00 触发）+ `generate_daily_insight.py` + `render_insight_image.py` + `market_data_fetcher.py` + `redfin_data_fetcher.py`；对所有 daily_push_enabled 经纪人按市场区域推送品牌图卡
+- **`/api/message` 意图分类路由** — 10 种 intent 分类（listing_video / daily_insight / style_selection / confirm / stop_push / resume_push / publish / revision / redo / off_topic）；text-command 兜底保证无按钮渠道体验一致
+- **后台守护任务** — `_job_watchdog_loop`（每 60s 检测 stall job）+ `_callback_retry_loop`（每 30s 刷新失败回调队列）
+- **OpenClaw bridge state 读取** — `_read_bridge_agent_state()` + `_infer_post_render_context()`，支持跨视频/资讯的交付上下文判断
 - Motion metrics（OpenCV Farneback 光流）集成到 review_video.py — commit 556f49b
 - 5 个 per-step quality gates 加入 dispatcher.py（critical=中止, warning=继续）
 - Prompt 质量优化：video_planner 重写（6 段叙事弧 + Hook-First）、video_prompt_writer 重写（运镜指令 + hallucination 风险分级）
@@ -20,9 +25,7 @@ alpha 阶段——视频质量打磨 + 偏好记忆 + 零摩擦入口
 - 10 个 pipeline 脚本 + pipeline.py CLI 端到端
 - Agent 人格 + 行为 spec（SOUL / AGENTS / SKILL）
 - 4 个 prompt 模板，3 个风格模板
-- macOS 部署打通：真实仓 `/Users/lsy/projects/realtor-social` 已完成依赖安装、`.env` 配置、服务常驻启动
 - 端到端真实图验证跑通：job `1774874734_09f47354` 成功交付 `Gym_Amenity_Test_4_9x16.mp4`（4.5s / has_audio=true）
-- 装配层修复：单镜头 concat 临时文件双删 bug 修复；per-scene narration duration 读取改为 mutagen 优先，避免 `ffprobe` 缺失导致 0.0s
 
 ## Blocked
 

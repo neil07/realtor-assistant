@@ -1,0 +1,67 @@
+kind,scenario_id,phone_key,phone,profile_state,text,has_media,status,http_status,intent,action,awaiting,response,text_commands,note,timestamp
+live_dialogue,INIT-E1-A1-01,new_user_referral,+15550001001,new,(photos attached),True,OK,200,listing_video,start_video,style_selection,"Got your photos! 📸
+
+Pick a style (type or tap):
+• elegant ✨
+• professional 💼
+• energetic 🔥","{""next"": ""Pick a style or send photos"", ""examples"": [""elegant"", ""professional"", ""energetic"", ""(send photos)""]}","Referral entry, direct photo send",2026-04-01T10:52:56.832541+00:00
+live_dialogue,INIT-E1-A2-01,new_user_referral,+15550001001,new,Is this an app? How do I use this?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}","Referral entry, user asks if this is an app",2026-04-01T10:52:56.834387+00:00
+live_dialogue,INIT-E1-A3-01,new_user_referral,+15550001001,new,How do I know this is secure and not spam?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}","Referral entry, user asks about security",2026-04-01T10:52:56.836044+00:00
+live_dialogue,INIT-E4-A4-01,new_user_natural,+15550001002,new,daily insight,False,OK,200,daily_insight,start_daily_insight,,Got it — I can prepare a ready-to-post daily insight for you. 📈,"{""next"": ""Ask for today's market content"", ""examples"": [""daily insight"", ""shorter"", ""more professional""]}","Natural traffic, new user asks for daily insight",2026-04-01T10:52:56.837509+00:00
+live_dialogue,INIT-E4-A1-01,new_user_natural,+15550001002,new,(photos attached),True,OK,200,listing_video,start_video,style_selection,"Got your photos! 📸
+
+Pick a style (type or tap):
+• elegant ✨
+• professional 💼
+• energetic 🔥","{""next"": ""Pick a style or send photos"", ""examples"": [""elegant"", ""professional"", ""energetic"", ""(send photos)""]}","Natural traffic, new user sends photos with no context",2026-04-01T10:52:56.841415+00:00
+live_dialogue,INIT-E4-A7-01,new_user_natural,+15550001002,new,How much is this per month?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}","Natural traffic, user asks price before trying",2026-04-01T10:52:56.842730+00:00
+targeted_probe,PROBE-APP-01,new_user_referral,+15550001001,new,Is this an app? How do I use this?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}",trust/setup confusion,2026-04-01T10:52:56.844057+00:00
+targeted_probe,PROBE-PRICE-01,new_user_natural,+15550001002,new,How much per month?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}",pricing sensitivity,2026-04-01T10:52:56.845468+00:00
+targeted_probe,PROBE-TRUST-01,new_user_referral,+15550001001,new,How do I know this is secure and not spam?,False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}",security trust question,2026-04-01T10:52:56.846810+00:00
+targeted_probe,PROBE-FIRSTSTEP-01,new_user_natural,+15550001002,new,"I do not know these tools, tell me the first step",False,OK,200,first_contact,welcome,,"Hey! I'm Reel Agent 🎬
+
+I do two things for you:
+1. Send me listing photos → I make a video
+2. Every morning → ready-to-post market content
+
+To start: just send your listing photos!","{""next"": ""Send listing photos to start"", ""examples"": [""(send photos)"", ""help"", ""daily insight""]}",needs starter task framing,2026-04-01T10:52:56.849099+00:00
+targeted_probe,PROBE-INSIGHTFIRST-01,new_user_natural,+15550001002,new,I do not have a listing today but I want daily content,False,OK,200,property_content,start_property_content,media_or_missing_property_context,Got it — this looks like a property content request. Send photos when you're ready and I'll take it from there. 🏡,"{""next"": ""Pick a style or send photos"", ""examples"": [""elegant"", ""professional"", ""energetic"", ""(send photos)""]}",insight-first natural phrasing,2026-04-01T10:52:56.850548+00:00
+targeted_probe,PROBE-INSIGHT-REFINE-01,returning_user_with_insight,+15550001005,returning,shorter,False,OK,200,off_topic,reject,,I only do listing videos and market content 📹 — send me photos or say 'help'!,"{""next"": ""Send photos or say help"", ""examples"": [""(send photos)"", ""help""]}",post-insight refinement,2026-04-01T10:52:56.851924+00:00
+targeted_probe,PROBE-POST-DELIVERY-01,returning_user_with_delivered_job,+15550001004,returning,more professional,False,OK,200,style_selection,set_style,,Style set to professional ✨,"{""next"": ""Confirm to start"", ""examples"": [""go"", ""ok""]}",style keyword after delivery,2026-04-01T10:52:56.853371+00:00
+targeted_probe,PROBE-POST-DELIVERY-02,returning_user_with_delivered_job,+15550001004,returning,make it more professional,False,OK,200,style_selection,set_style,,Style set to professional ✨,"{""next"": ""Confirm to start"", ""examples"": [""go"", ""ok""]}",natural revision phrasing after delivery,2026-04-01T10:52:56.854537+00:00

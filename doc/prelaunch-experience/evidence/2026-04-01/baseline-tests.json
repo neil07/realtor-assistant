@@ -1,0 +1,31 @@
+[
+  {
+    "test_id": "assets",
+    "cmd": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_experience_assets.py",
+      "-q"
+    ],
+    "returncode": 0,
+    "stdout": "....                                                                     [100%]\n4 passed in 0.15s\n",
+    "stderr": "",
+    "timestamp": "2026-04-01T10:52:56.280066+00:00"
+  },
+  {
+    "test_id": "routing_and_bridge",
+    "cmd": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_message_routing.py",
+      "tests/test_openclaw_mock_integration.py",
+      "-q"
+    ],
+    "returncode": 1,
+    "stdout": "...........................F..                                           [100%]\n=================================== FAILURES ===================================\n__________ test_progress_notifier_daily_insight_uses_bridge_contract ___________\n\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10853b2f0>\n\n    def test_progress_notifier_daily_insight_uses_bridge_contract(monkeypatch) -> None:\n        monkeypatch.setenv(\"OPENCLAW_CALLBACK_BASE_URL\", \"https://openclaw.example/reel-agent\")\n        monkeypatch.setenv(\"PUBLIC_BASE_URL\", \"https://reel-agent.example\")\n        client = RecordingCallbackClient()\n        notifier = ProgressNotifier(client)\n    \n        asyncio.run(\n            notifier.notify_daily_insight(\n                \"+10000000000\",\n                {\n                    \"topic\": \"inventory\",\n                    \"headline\": \"Inventory is tightening\",\n                    \"caption\": \"Lehigh Valley inventory is down 8% this week.\",\n                    \"hashtags\": [\"#realestate\", \"#marketupdate\"],\n                    \"cta\": \"DM me for the latest listings\",\n                    \"content_type\": \"market_stat\",\n                },\n                {\"portrait\": \"/tmp/output/insight-card.png\"},\n                {\"name\": \"Natalie\"},\n            )\n        )\n    \n        assert len(client.calls) == 1\n        call = client.calls[0]\n        assert call[\"url\"] == \"https://openclaw.example/reel-agent/events\"\n        assert call[\"payload\"][\"type\"] == \"daily_insight\"\n        assert call[\"payload\"][\"agent_phone\"] == \"+10000000000\"\n        assert call[\"payload\"][\"agent_name\"] == \"Natalie\"\n>       assert call[\"payload\"][\"insight\"][\"headline\"] == \"Inventory is tightening\"\nE       AssertionError: assert '' == 'Inventory is tightening'\nE         \nE         - Inventory is tightening\n\ntests/test_openclaw_mock_integration.py:348: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_openclaw_mock_integration.py::test_progress_notifier_daily_insight_uses_bridge_contract\n1 failed, 29 passed in 0.23s\n",
+    "stderr": "",
+    "timestamp": "2026-04-01T10:52:56.791141+00:00"
+  }
+]

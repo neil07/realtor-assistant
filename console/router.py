@@ -9,11 +9,11 @@ All routes are prefixed with /console by server.py.
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 # Add scripts to path for profile_manager access
@@ -22,7 +22,14 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import profile_manager
 
-from console.memory_schema import compute_completeness, get_field_details, set_field_value, EDITABLE_FIELDS, FIELD_LABELS
+from console.memory_schema import (
+    EDITABLE_FIELDS,
+    FIELD_LABELS,
+    compute_completeness,
+    get_field_details,
+    get_recommended_experience,
+    set_field_value,
+)
 
 router = APIRouter(prefix="/console", tags=["console"])
 
@@ -46,9 +53,11 @@ def _get_all_profiles() -> list[dict]:
             import json
             profile = json.loads(path.read_text())
             completeness = compute_completeness(profile)
+            guidance = get_recommended_experience(profile, completeness)
             results.append({
                 "profile": profile,
                 "completeness": completeness,
+                "guidance": guidance,
             })
         except Exception:
             continue
@@ -116,7 +125,7 @@ async def create_client(
         profile_manager.update_profile(phone, {"_form_token": token})
     else:
         # Create new profile with minimal info
-        profile = profile_manager.create_profile(phone=phone, name=name)
+        profile_manager.create_profile(phone=phone, name=name)
         token = uuid.uuid4().hex
         profile_manager.update_profile(phone, {"_form_token": token})
 
@@ -125,12 +134,10 @@ async def create_client(
     # Notify OpenClaw bot to send the form link
     bot_sent = False
     try:
-        from orchestrator.progress_notifier import ProgressNotifier
         from agent.callback_client import CallbackClient
 
         base_url = os.getenv("OPENCLAW_CALLBACK_BASE_URL", "")
         if base_url:
-            import asyncio
             client = CallbackClient()
             bot_sent = await client.send(
                 f"{base_url.rstrip('/')}/events",
@@ -141,11 +148,10 @@ async def create_client(
                     "form_url": form_url,
                     "message": (
                         f"Hi {name}! I'm your content assistant.\n\n"
-                        f"To create your first FREE listing video, "
-                        f"I need 60 seconds of your time:\n"
-                        f"{form_url}\n\n"
-                        f"Just pick your video style & tell me your market — "
-                        f"I'll handle the rest."
+                        "You can try Reel Agent right away by sending 6-10 listing photos "
+                        "or replying 'daily insight'.\n\n"
+                        "If you want faster, more personalized results, fill this quick setup form:\n"
+                        f"{form_url}"
                     ),
                 },
             )
@@ -184,7 +190,7 @@ async def onboarding_form(request: Request, token: str):
     if not profile.get("_form_opened_at"):
         profile_manager.update_profile(
             profile["phone"],
-            {"_form_opened_at": datetime.now(timezone.utc).isoformat()},
+            {"_form_opened_at": datetime.now(UTC).isoformat()},
         )
 
     return templates.TemplateResponse("onboarding_form.html", {
@@ -221,7 +227,7 @@ async def submit_form(
     phone = profile["phone"]
 
     # Build updates from form data
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     updates: dict = {"_form_submitted": True, "_form_submitted_at": now}
     if name.strip():
         updates["name"] = name.strip()
@@ -258,7 +264,7 @@ async def submit_form(
                     "agent_phone": phone,
                     "agent_name": agent_name,
                     "message": f"{agent_name} just completed the onboarding form! "
-                               f"Video Ready ✅ — you can now send listing photos.",
+                               f"They can now send listing photos or reply 'daily insight'.",
                 },
             ))
     except Exception:
@@ -283,6 +289,7 @@ async def client_detail(request: Request, phone: str):
         raise HTTPException(404, "Client not found")
 
     completeness = compute_completeness(profile)
+    guidance = get_recommended_experience(profile, completeness)
     dimensions = get_field_details(profile)
 
     # Load Skill briefs for this agent
@@ -297,7 +304,6 @@ async def client_detail(request: Request, phone: str):
             content = brief_path.read_text() if brief_path.exists() else None
 
         if content is not None:
-            from pathlib import Path as _Path
             default_content = profile_manager.DEFAULT_BRIEF_PATH.read_text() if profile_manager.DEFAULT_BRIEF_PATH.exists() else ""
             is_customized = content != default_content if skill_type == "video" else True
             skills.append({
@@ -324,6 +330,7 @@ async def client_detail(request: Request, phone: str):
         "phone": phone,
         "skills": skills,
         "field_labels": FIELD_LABELS,
+        "guidance": guidance,
     })
 
 

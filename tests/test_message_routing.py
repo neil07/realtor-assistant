@@ -144,3 +144,81 @@ def test_recent_daily_insight_beats_older_delivered_job_for_skip() -> None:
     )
     assert result["intent"] == "skip"
     assert result["action"] == "skip"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_intent", "expected_action"),
+    [
+        ("Is this an app? How do I use this?", "app_question", "explain_use"),
+        ("How do I know this is secure and not spam?", "trust_question", "reassure_trust"),
+        ("How much per month?", "pricing_question", "explain_pricing"),
+        (
+            "I do not know these tools, tell me the first step",
+            "first_step_question",
+            "recommend_starter_task",
+        ),
+        (
+            "I do not have a listing today but I want daily content",
+            "daily_insight",
+            "start_daily_insight",
+        ),
+    ],
+)
+def test_new_user_routes_trust_and_insight_first_cases(
+    text: str, expected_intent: str, expected_action: str
+) -> None:
+    result = _classify_intent(text, False, None, None)
+    assert result["intent"] == expected_intent
+    assert result["action"] == expected_action
+
+
+def test_exact_style_word_still_sets_style() -> None:
+    result = _classify_intent("professional", False, RETURNING_PROFILE, None)
+    assert result["intent"] == "style_selection"
+    assert result["action"] == "set_style"
+    assert result["style"] == "professional"
+
+
+def test_daily_insight_refinement_shorter_uses_recent_bridge_state() -> None:
+    result = _classify_intent(
+        "shorter",
+        False,
+        RETURNING_PROFILE,
+        None,
+        {
+            "lastDailyInsight": {
+                "headline": "Inventory is tightening",
+                "updatedAt": "2026-04-01T03:00:00+00:00",
+            }
+        },
+    )
+    assert result["intent"] == "daily_insight_refinement"
+    assert result["action"] == "refine_daily_insight"
+
+
+def test_daily_insight_refinement_more_professional_uses_recent_bridge_state() -> None:
+    result = _classify_intent(
+        "more professional",
+        False,
+        RETURNING_PROFILE,
+        None,
+        {
+            "lastDailyInsight": {
+                "headline": "Inventory is tightening",
+                "updatedAt": "2026-04-01T03:00:00+00:00",
+            }
+        },
+    )
+    assert result["intent"] == "daily_insight_refinement"
+    assert result["action"] == "refine_daily_insight"
+
+
+def test_more_professional_after_delivery_is_revision_not_style_selection() -> None:
+    result = _classify_intent(
+        "make it more professional",
+        False,
+        RETURNING_PROFILE,
+        {"status": "DELIVERED"},
+    )
+    assert result["intent"] == "revision"
+    assert result["action"] == "submit_feedback"

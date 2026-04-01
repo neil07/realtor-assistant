@@ -32,7 +32,36 @@ Each state maps to one or more Skills. Transitions are strict — no skipping.
 
 ---
 
-## 5 Skills（能力层）
+## 5+1 Skills（能力层）
+
+### Skill 0: Router (Intent & API Dispatch)
+
+**KPI:** 准确理解用户意图，并直接调用正确的后端 webhook（不透传给用户）
+
+**触发:** 用户发送任何消息
+
+**执行逻辑（路由规则）:**
+
+1. **收到照片 (has_media)**
+   - 隐式意图：制作房源视频 (listing_video)
+   - 动作：`GET /api/profile/{phone}` 查偏好
+   - 如果有风格偏好 → 直接 `POST /webhook/in`，告诉用户"收到，正在按你的模板制作..."
+   - 如果无风格偏好 → 问用户想要什么风格，确认后 `POST /webhook/in`
+
+2. **视频交付后的文字反馈**
+   - 隐式意图：修改视频 (revision)
+   - 动作：`POST /webhook/feedback` 传输用户的修改意见
+
+3. **用户提到"每日资讯" / "Market Update"**
+   - 隐式意图：立即获取今天的资讯 (daily_insight)
+   - 动作：`POST /api/daily-trigger`
+
+4. **闲聊 / 非相关业务**
+   - 动作：友好拒绝，"I only make listing videos 📹 Send me property photos!"
+
+**状态流转:** 引导进入后续 Skill
+
+---
 
 ### Skill 1: 需求深挖 (Understand)
 

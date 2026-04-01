@@ -1,0 +1,304 @@
+{
+  "video_packs": [
+    {
+      "pack_id": "V1",
+      "name": "Happy path video delivery",
+      "summary": "Professional pacing, clean delivery, caption feels like a real agent.",
+      "surface": "delivery_message",
+      "simulated_output": {
+        "message": "Video ready. Short version for Instagram attached below. Caption drafted too.",
+        "caption": "Just listed in Frisco. The kitchen and backyard are what sold me here. If you're looking for a home that actually feels calm the second you walk in, this one is worth a look.",
+        "hashtags": [
+          "#FriscoTX",
+          "#JustListed",
+          "#DFWRealEstate",
+          "#BackyardGoals",
+          "#FriscoHomes"
+        ]
+      },
+      "user_reaction": "I could post this with light edits, maybe none.",
+      "questions_to_probe": [
+        "Would you post this today?",
+        "What feels most publish-ready?",
+        "Does the tone sound like a real agent?"
+      ]
+    },
+    {
+      "pack_id": "V2",
+      "name": "Brochure-like script",
+      "summary": "The script sounds templated, generic, and too polished in a bad way.",
+      "surface": "storyboard_and_script",
+      "simulated_output": {
+        "message": "Welcome to this stunning property offering exceptional living with elegance and comfort throughout.",
+        "caption": "Discover luxury, convenience, and charm in this one-of-a-kind home."
+      },
+      "user_reaction": "This sounds like every listing description ever.",
+      "questions_to_probe": [
+        "At what word do you stop trusting this?",
+        "Would this hurt your personal brand?"
+      ]
+    },
+    {
+      "pack_id": "V3",
+      "name": "Wrong style for senior agent",
+      "summary": "Cuts are too flashy, music too young, language too social-native.",
+      "surface": "video_style_and_script",
+      "simulated_output": {
+        "message": "Fast-cut edit with punchy text and heavy bass.",
+        "caption": "Okay this one is a total flex."
+      },
+      "user_reaction": "Not my brand. Feels like it's for a 27-year-old agent.",
+      "questions_to_probe": [
+        "Would you send this to your office peers?",
+        "Does this feel cheap, trendy, or just wrong?"
+      ]
+    },
+    {
+      "pack_id": "V4",
+      "name": "Silent or weak progress phase",
+      "summary": "The wait phase feels like the system disappeared or turned into a job log.",
+      "surface": "progress_messages",
+      "simulated_output": {
+        "message": "SCRIPTING COMPLETE. PROMPTING STARTED. PRODUCING FRAME SEQUENCES."
+      },
+      "user_reaction": "I don't know what that means. Is it stuck?",
+      "questions_to_probe": [
+        "After 60-90 seconds, what would you do next?",
+        "Does this build confidence or anxiety?"
+      ]
+    },
+    {
+      "pack_id": "V5",
+      "name": "Caption clutter",
+      "summary": "Delivery message is long, caption is bloated, hashtags are generic.",
+      "surface": "delivery_message",
+      "simulated_output": {
+        "message": "Video ready! Here is your professionally created social media optimized marketing deliverable. Suggested caption and hashtags are below for your convenience.",
+        "caption": "Welcome to an incredible opportunity to own a beautiful, amazing, wonderful home in a fantastic neighborhood with tons of natural light, spacious interiors, and endless charm.",
+        "hashtags": [
+          "#realestate",
+          "#home",
+          "#house",
+          "#property",
+          "#realtor",
+          "#luxury",
+          "#dreamhome",
+          "#listing"
+        ]
+      },
+      "user_reaction": "Too much. Too generic. Not posting this as-is.",
+      "questions_to_probe": [
+        "Is the problem length, tone, or both?",
+        "Which part do you distrust most?"
+      ]
+    },
+    {
+      "pack_id": "V6",
+      "name": "Hallucination risk",
+      "summary": "Output claims features not supported by the provided photos.",
+      "surface": "script_and_caption",
+      "simulated_output": {
+        "caption": "The pool and outdoor entertaining setup are what make this listing stand out."
+      },
+      "user_reaction": "There is no pool in these photos. This is a hard stop.",
+      "questions_to_probe": [
+        "Would one hallucination kill trust permanently?",
+        "What level of review would you require after this?"
+      ]
+    },
+    {
+      "pack_id": "V7",
+      "name": "Revision did not land",
+      "summary": "User asked for a calmer tone but the regenerated output barely changed.",
+      "surface": "revision_delivery",
+      "simulated_output": {
+        "user_request": "Make it less salesy and more professional.",
+        "updated_caption": "This beautiful home is a must-see opportunity you do not want to miss."
+      },
+      "user_reaction": "You did not really change it.",
+      "questions_to_probe": [
+        "Did the system acknowledge what changed?",
+        "Would you try a second revision or give up?"
+      ]
+    },
+    {
+      "pack_id": "V8",
+      "name": "Delivery defect",
+      "summary": "Video arrives with wrong aspect ratio, missing audio, or broken CTA.",
+      "surface": "delivery_message",
+      "simulated_output": {
+        "message": "Video ready.",
+        "issue": "Horizontal output delivered when user expected vertical; CTA missing."
+      },
+      "user_reaction": "Now I have to troubleshoot instead of posting.",
+      "questions_to_probe": [
+        "How much troubleshooting tolerance do you have?",
+        "Would this feel like a reliability issue or just a bug?"
+      ]
+    }
+  ],
+  "insight_packs": [
+    {
+      "pack_id": "I1",
+      "name": "Useful and local insight",
+      "summary": "Feels relevant to the agent's market and usable today.",
+      "surface": "daily_insight",
+      "simulated_output": {
+        "headline": "Frisco inventory is loosening slightly before the spring weekend rush",
+        "caption": "If you've been waiting for a little more buyer choice in Frisco, this week is one to watch. Inventory is ticking up just enough to create options without killing urgency."
+      },
+      "user_reaction": "This feels like something I could post this morning.",
+      "questions_to_probe": [
+        "Does this sound local enough?",
+        "Would you skip editing and post it?"
+      ]
+    },
+    {
+      "pack_id": "I2",
+      "name": "Generic market insight",
+      "summary": "Could apply to any city and any agent.",
+      "surface": "daily_insight",
+      "simulated_output": {
+        "headline": "The market continues to evolve for buyers and sellers",
+        "caption": "Real estate trends are shifting, and staying informed is important."
+      },
+      "user_reaction": "This tells me nothing.",
+      "questions_to_probe": [
+        "Would you call this filler content?",
+        "What specific local detail is missing?"
+      ]
+    },
+    {
+      "pack_id": "I3",
+      "name": "Insight too long",
+      "summary": "Useful idea, but too long for a busy agent to review or post.",
+      "surface": "daily_insight",
+      "simulated_output": {
+        "caption": "Three dense paragraphs explaining inventory, rates, buyer behavior, and seller psychology in one post."
+      },
+      "user_reaction": "I don't have time to trim this every morning.",
+      "questions_to_probe": [
+        "Would you post a shorter version?",
+        "Does length alone make this unusable?"
+      ]
+    },
+    {
+      "pack_id": "I4",
+      "name": "AI-sounding insight",
+      "summary": "The tone is polished but unnatural and obviously synthetic.",
+      "surface": "daily_insight",
+      "simulated_output": {
+        "caption": "In the dynamic and ever-changing real estate landscape, strategic awareness remains a cornerstone of market participation."
+      },
+      "user_reaction": "This is not how I talk to clients.",
+      "questions_to_probe": [
+        "How quickly do you recognize this as AI?",
+        "Would you rewrite it or abandon it?"
+      ]
+    },
+    {
+      "pack_id": "I5",
+      "name": "Wrong tone for a senior agent",
+      "summary": "Insight sounds too casual, meme-like, or social-native.",
+      "surface": "daily_insight",
+      "simulated_output": {
+        "caption": "Okay buyers, this week is kinda wild and you need to keep your eyes peeled."
+      },
+      "user_reaction": "Too playful for my clientele.",
+      "questions_to_probe": [
+        "Does this make you look unserious?",
+        "Would younger agents like this more than you would?"
+      ]
+    },
+    {
+      "pack_id": "I6",
+      "name": "Repetitive over a week",
+      "summary": "Topics blend together and users stop expecting something useful.",
+      "surface": "daily_insight_series",
+      "simulated_output": {
+        "pattern": "Five consecutive days of generic inventory/rate updates with nearly identical structure."
+      },
+      "user_reaction": "After three days I'd start skipping these automatically.",
+      "questions_to_probe": [
+        "At what day do you stop paying attention?",
+        "What variety would make this worth keeping?"
+      ]
+    }
+  ],
+  "task_plan_packs": [
+    {
+      "pack_id": "T1",
+      "name": "Video-first single next step",
+      "summary": "Best when the user has a live listing and wants the shortest path.",
+      "surface": "starter_task",
+      "simulated_output": {
+        "message": "Next best step: send 6-10 listing photos and I'll make your first trial video."
+      },
+      "user_reaction": "Good. One thing to do.",
+      "questions_to_probe": [
+        "Would you do this right now?",
+        "Does it feel low-friction enough?"
+      ]
+    },
+    {
+      "pack_id": "T2",
+      "name": "Insight-first branch recommendation",
+      "summary": "Best when the user has no listing today but wants value quickly.",
+      "surface": "starter_task",
+      "simulated_output": {
+        "message": "Since you don't have a listing today, I can set up your daily market content first and get you posting this week."
+      },
+      "user_reaction": "That makes sense. It's a helpful suggestion, not another form.",
+      "questions_to_probe": [
+        "Does this feel like a smart assistant move?",
+        "Would this make you more likely to try video later?"
+      ]
+    },
+    {
+      "pack_id": "T3",
+      "name": "Interview-first light task card",
+      "summary": "Turns a short conversation into a concrete starter plan.",
+      "surface": "starter_task",
+      "simulated_output": {
+        "tasks": [
+          "Task 1: Pick your video style",
+          "Task 2: Send one current listing",
+          "Task 3: Tell me your main market area for daily content"
+        ]
+      },
+      "user_reaction": "This feels guided, as long as it's really short.",
+      "questions_to_probe": [
+        "Are three tasks too many?",
+        "Does this feel supportive or like homework?"
+      ]
+    },
+    {
+      "pack_id": "T4",
+      "name": "Brand calibration before video",
+      "summary": "Useful for luxury or high-control agents who care about tone first.",
+      "surface": "starter_task",
+      "simulated_output": {
+        "message": "Before your first video, give me your preferred tone: elegant, professional, or energetic. Then send one listing."
+      },
+      "user_reaction": "That is acceptable if it stays to one small choice.",
+      "questions_to_probe": [
+        "Does the tone choice feel necessary?",
+        "Would you rather skip this and adjust later?"
+      ]
+    },
+    {
+      "pack_id": "T5",
+      "name": "Skip-the-form shortest path",
+      "summary": "For skeptical or low-patience users who need immediate traction.",
+      "surface": "starter_task",
+      "simulated_output": {
+        "message": "You don't need to set anything up first. Send one listing photo set and I'll show you what this does."
+      },
+      "user_reaction": "That lowers my guard right away.",
+      "questions_to_probe": [
+        "Does this reduce resistance?",
+        "Would you still want to know pricing before doing it?"
+      ]
+    }
+  ]
+}

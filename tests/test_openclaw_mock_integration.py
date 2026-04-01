@@ -119,6 +119,7 @@ def test_api_message_routes_new_user_daily_insight(monkeypatch) -> None:
     assert body["intent"] == "daily_insight"
     assert body["action"] == "start_daily_insight"
     assert body["has_profile"] is False
+    assert body["recommended_path"] == "insight_first"
 
 
 def test_api_message_routes_returning_user_property_content_before_revision(monkeypatch) -> None:
@@ -155,6 +156,132 @@ def test_api_message_routes_returning_user_property_content_before_revision(monk
     body = response.json()
     assert body["intent"] == "property_content"
     assert body["action"] == "start_property_content"
+
+
+def test_api_router_test_alias_works(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/router-test",
+        headers={"Authorization": "Bearer test-token"},
+        json={"agent_phone": "+10000000000", "text": "daily insight", "has_media": False},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "daily_insight"
+    assert body["action"] == "start_daily_insight"
+
+
+def test_api_message_routes_trust_first_entry(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "text": "Is this an app? How do I use this?",
+            "has_media": False,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "app_question"
+    assert body["action"] == "explain_use"
+    assert body["recommended_path"] == "video_first"
+    assert body["starter_task"] == {
+        "label": "Send 6-10 listing photos",
+        "command": "(send photos)",
+    }
+
+
+def test_api_message_routes_pricing_question_with_starter_task(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "text": "How much per month?",
+            "has_media": False,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "pricing_question"
+    assert body["action"] == "explain_pricing"
+    assert body["starter_task"]["command"] == "(send photos)"
+
+
+def test_api_message_routes_mixed_insight_first_phrase(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "text": "I do not have a listing today but I want daily content",
+            "has_media": False,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "daily_insight"
+    assert body["action"] == "start_daily_insight"
+    assert body["recommended_path"] == "insight_first"
+
+
+def test_api_message_prompts_new_user_for_style_when_no_profile_exists(monkeypatch) -> None:
+    import profile_manager
+
+    monkeypatch.setattr(profile_manager, "get_profile", lambda phone: None)
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    server._job_mgr = FakeJobManager()
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/api/message",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "text": "",
+            "has_media": True,
+            "media_paths": ["/tmp/front.jpg"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "listing_video"
+    assert body["action"] == "start_video"
+    assert body["awaiting"] == "style_selection"
+    assert "Pick a style" in body["response"]
 
 
 def test_api_message_routes_skip_when_recent_daily_insight_exists(monkeypatch, tmp_path) -> None:
@@ -347,6 +474,43 @@ def test_progress_notifier_daily_insight_uses_bridge_contract(monkeypatch) -> No
     assert call["payload"]["agent_name"] == "Natalie"
     assert call["payload"]["insight"]["headline"] == "Inventory is tightening"
     assert call["payload"]["image_urls"]["portrait"] == "https://reel-agent.example/output/insight-card.png"
+
+
+def test_progress_notifier_daily_insight_accepts_v2_content_pack_shape(monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_CALLBACK_BASE_URL", "https://openclaw.example/reel-agent")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://reel-agent.example")
+    client = RecordingCallbackClient()
+    notifier = ProgressNotifier(client)
+
+    asyncio.run(
+        notifier.notify_daily_insight(
+            "+10000000000",
+            {
+                "briefing": {
+                    "headline": "Inventory is tightening",
+                    "key_numbers": "Inventory down 8%",
+                    "talking_points_buyers": ["More leverage is gone"],
+                    "talking_points_sellers": ["Price correctly"],
+                },
+                "social_post": {
+                    "caption": "Inventory is down 8% this week.",
+                    "hashtags": ["#realestate", "#marketupdate"],
+                },
+                "_meta": {"topic_type": "market_stat"},
+                "forward_buyer": {"text": "Buyer forward"},
+                "forward_seller": {"text": "Seller forward"},
+            },
+            {"portrait": "/tmp/output/insight-card.png"},
+            {"name": "Natalie"},
+        )
+    )
+
+    assert len(client.calls) == 1
+    payload = client.calls[0]["payload"]
+    assert payload["insight"]["headline"] == "Inventory is tightening"
+    assert payload["insight"]["caption"] == "Inventory is down 8% this week."
+    assert payload["insight"]["topic_type"] == "market_stat"
+    assert payload["forward_buyer"] == "Buyer forward"
 
 
 def test_progress_notifier_skips_when_callback_target_missing(monkeypatch) -> None:

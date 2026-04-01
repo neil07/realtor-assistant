@@ -30,8 +30,8 @@
       </h1>
       <p class="text-slate-500 leading-relaxed text-[15px]">
         Thanks <span class="font-semibold text-slate-800">{{ name }}</span>!
-        You've already filled out this form. Your preferences are saved — we'll
-        use them for your next video.
+        You've already filled out this form. Your preferences are saved for both
+        listing videos and daily insights.
       </p>
       {% else %}
       <div class="text-6xl mb-6 animate-bounce">🎉</div>
@@ -39,10 +39,38 @@
         You're All Set, {{ name }}!
       </h1>
       <p class="text-slate-500 leading-relaxed text-[15px]">
-        Your preferences have been saved. Next time you send us listing photos,
-        we'll create a video that matches your style perfectly.
+        Your preferences have been saved. You can try Reel Agent right away with
+        either of these next steps.
       </p>
       {% endif %}
+      <div class="mt-8 space-y-3 text-left">
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+          <div
+            class="text-xs font-bold uppercase tracking-widest text-slate-500"
+          >
+            Next Step 1
+          </div>
+          <div class="mt-1 text-sm font-semibold text-slate-900">
+            Send 6-10 listing photos
+          </div>
+          <div class="mt-1 text-sm text-slate-500">
+            We'll turn them into a first video using your saved style.
+          </div>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+          <div
+            class="text-xs font-bold uppercase tracking-widest text-slate-500"
+          >
+            Next Step 2
+          </div>
+          <div class="mt-1 text-sm font-semibold text-slate-900">
+            Reply "daily insight"
+          </div>
+          <div class="mt-1 text-sm text-slate-500">
+            We'll send a ready-to-post market update for your area.
+          </div>
+        </div>
+      </div>
       <div
         class="mt-12 flex items-center justify-center gap-1.5 text-xs text-slate-400 font-bold tracking-widest uppercase"
       >

@@ -12,11 +12,13 @@ flowchart TD
         A1[📱 WhatsApp 发送照片]
         A2[收到视频]
         A3[回复反馈 👍/👎 + 文字]
+        A4[早上收到每日资讯图卡]
     end
 
     subgraph OpenClaw
         B1[接收消息 + 照片]
         B2[POST /webhook/in]
+        B3[POST /api/message\n意图分类路由]
     end
 
     subgraph 编排层 orchestrator
@@ -27,6 +29,7 @@ flowchart TD
         C5[从全局默认复制\nprofiles/briefs/phone/video.md]
         C6[加载个人 Brief]
         C7[提交 Job 到调度队列]
+        C8[DailyScheduler\nUTC 13:00 触发]
     end
 
     subgraph Pipeline 能力层
@@ -35,12 +38,14 @@ flowchart TD
         D2b[🎥 并发 IMA 视频生成\nThreadPoolExecutor\nwan2.6-i2v × N scenes]
         D3[✂️ 视频组装 FFmpeg]
         D4[⭐ 质量审核 review_video]
+        D5[📰 每日资讯生成\ngenerate_daily_insight\n+ render_insight_image]
     end
 
-    subgraph 运营后台 Admin
-        E1[GET /admin\n查看所有经纪人 Skill 状态]
-        E2[浏览器编辑器\n/admin/agents/phone/skills/video/edit]
-        E3[PUT API\n覆盖写入 Brief]
+    subgraph 运营控制台 Console
+        E1[GET /console\n查看所有经纪人状态]
+        E2[客户详情\n/console/client/phone]
+        E3[PUT 保存 Brief\n/console/client/phone/skills/video]
+        E4[GET /console/onboard\nH5 入驻表单]
     end
 
     A1 --> B1 --> B2 --> C1
@@ -54,12 +59,17 @@ flowchart TD
     D4 -->|score ≥ 6.5| A2
     D4 -->|score < 6.5| D3
 
+    C8 --> D5 --> A4
+
     A2 --> A3 --> E1
     E1 --> E2 --> E3 --> C6
+    E4 -.->|onboarding| C2
 
     style C5 fill:#fef3c7,stroke:#f59e0b
     style D2b fill:#dbeafe,stroke:#3b82f6
-    style E2 fill:#dcfce7,stroke:#22c55e
+    style E3 fill:#dcfce7,stroke:#22c55e
+    style D5 fill:#f0fdf4,stroke:#22c55e
+    style C8 fill:#eff6ff,stroke:#3b82f6
 ```
 
 ---
@@ -111,20 +121,19 @@ skills/listing-video/
 
 ---
 
-## 运营后台使用方式
+## 运营控制台使用方式
 
-服务启动后，访问 `http://localhost:8000/admin`：
+服务启动后，访问 `http://localhost:8000/console`：
 
-| 页面       | URL                                             | 功能                                  |
-| ---------- | ----------------------------------------------- | ------------------------------------- |
-| 经纪人列表 | `/admin`                                        | 查看所有经纪人，显示 Brief 是否已定制 |
-| 浏览器编辑 | `/admin/agents/{phone}/skills/video/edit`       | 在线 Markdown 编辑器，直接改 Brief    |
-| API 读取   | `GET /admin/agents/{phone}/skills/video`        | 返回 JSON `{content: "..."}`          |
-| API 更新   | `PUT /admin/agents/{phone}/skills/video`        | body 为纯文本 Markdown                |
-| API 重置   | `POST /admin/agents/{phone}/skills/video/reset` | 恢复为全局默认                        |
-
-**权限**：设置环境变量 `ADMIN_TOKEN=your-token`，请求需携带 `Authorization: Bearer your-token`。
-未设置则开放访问（开发模式）。
+| 页面        | URL                                                | 功能                                    |
+| ----------- | -------------------------------------------------- | --------------------------------------- |
+| 仪表板      | `/console/`                                        | 查看所有经纪人，显示 Brief 是否已定制   |
+| 创建客户    | `/console/onboard`                                 | 创建新经纪人 profile + 生成 H5 表单链接 |
+| H5 入驻表单 | `/console/form/{token}`                            | 经纪人填写偏好（风格/市场/语言等）      |
+| 客户详情    | `/console/client/{phone}`                          | 23-field 详情 + Skill Brief 在线编辑    |
+| 保存 Brief  | `PUT /console/client/{phone}/skills/{type}`        | 保存视频或资讯 Skill Brief              |
+| 重置 Brief  | `POST /console/client/{phone}/skills/{type}/reset` | 恢复为全局默认                          |
+| 字段编辑    | `POST /console/api/update-field`                   | HTMX 内联编辑任意字段（无 reload）      |
 
 ---
 

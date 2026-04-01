@@ -237,6 +237,12 @@ READINESS: dict[str, dict] = {
     },
 }
 
+PATH_LABELS = {
+    "video_first": "视频优先",
+    "insight_first": "资讯优先",
+    "interview_first": "访谈优先",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -321,6 +327,83 @@ def compute_completeness(profile: dict) -> dict:
         "missing": missing,
         "missing_by_channel": missing_by_channel,
         "readiness": readiness,
+    }
+
+
+def get_activation_state(profile: dict) -> dict:
+    """Return activation metadata with safe defaults."""
+    activation = profile.get("activation") or {}
+    return {
+        "last_successful_path": activation.get("last_successful_path", ""),
+        "last_recommended_path": activation.get("last_recommended_path", ""),
+        "first_value_seen": bool(activation.get("first_value_seen", False)),
+    }
+
+
+def get_recommended_path(profile: dict, completeness: dict | None = None) -> str:
+    """Choose the best activation path for the current operator state."""
+    completeness = completeness or compute_completeness(profile)
+    readiness = completeness["readiness"]
+    activation = get_activation_state(profile)
+    videos_created = profile.get("stats", {}).get("videos_created", 0)
+
+    if activation["last_successful_path"] in PATH_LABELS:
+        return activation["last_successful_path"]
+
+    if (
+        not activation["first_value_seen"]
+        and not readiness["video"]["ready"]
+        and not readiness["insight"]["ready"]
+    ):
+        return "interview_first"
+
+    if readiness["video"]["ready"] and not readiness["insight"]["ready"]:
+        return "video_first"
+
+    if readiness["insight"]["ready"] and not readiness["video"]["ready"]:
+        return "insight_first"
+
+    if readiness["video"]["ready"] and readiness["insight"]["ready"] and videos_created > 0:
+        return "video_first"
+
+    if readiness["video"]["ready"] and readiness["insight"]["ready"]:
+        return "video_first"
+
+    return "video_first"
+
+
+def get_next_best_action(profile: dict, completeness: dict | None = None) -> str:
+    """Return the operator-facing next action for the selected activation path."""
+    completeness = completeness or compute_completeness(profile)
+    readiness = completeness["readiness"]
+    path = get_recommended_path(profile, completeness)
+
+    if path == "interview_first":
+        if profile.get("_form_submitted"):
+            return "Ask one quick market question, then trigger the fastest starter task."
+        return "Use a quick trust-first opener. Offer the form as optional, not required."
+
+    if path == "insight_first":
+        if readiness["insight"]["ready"]:
+            return "Reply \"daily insight\" to generate a ready-to-post market update."
+        return "Collect market area or city first, then trigger daily insight."
+
+    if readiness["video"]["ready"]:
+        return "Ask for 6-10 listing photos to create the first video."
+
+    return "Send the starter task: ask for 6-10 listing photos. Default style is professional."
+
+
+def get_recommended_experience(profile: dict, completeness: dict | None = None) -> dict:
+    """Bundle path label, next best action, and activation metadata for UI use."""
+    completeness = completeness or compute_completeness(profile)
+    activation = get_activation_state(profile)
+    path = get_recommended_path(profile, completeness)
+    return {
+        "recommended_path": path,
+        "recommended_path_label": PATH_LABELS[path],
+        "next_best_action": get_next_best_action(profile, completeness),
+        "activation": activation,
     }
 
 

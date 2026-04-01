@@ -1,0 +1,783 @@
+{
+  "version": "2026-04-01",
+  "personas": [
+    {
+      "persona_id": "P1",
+      "name": "Referral Queen",
+      "age_band": "45-55",
+      "summary": "10+ years, referral-led, impatient, ROI-sensitive, not very tech savvy."
+    },
+    {
+      "persona_id": "P2",
+      "name": "Control Veteran",
+      "age_band": "50-60",
+      "summary": "20+ years, cares about accuracy, brand control, and human oversight."
+    },
+    {
+      "persona_id": "P3",
+      "name": "Busy Lease Specialist",
+      "age_band": "40-50",
+      "summary": "Paperwork-heavy, time-poor, wants the shortest possible path."
+    },
+    {
+      "persona_id": "P4",
+      "name": "Luxury Brand Keeper",
+      "age_band": "45-60",
+      "summary": "High-end listing agent, very sensitive to tone, pacing, fonts, and cheapness."
+    },
+    {
+      "persona_id": "P5",
+      "name": "Skeptical Brokerage Switcher",
+      "age_band": "50-60",
+      "summary": "Recently trained on a brokerage tool, cautious, compares everything to existing systems."
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "INIT-E1-A1-01",
+      "track": "initialization",
+      "title": "Referral entry, direct photo send",
+      "persona_id": "P1",
+      "entry_point": "friend_referral",
+      "first_action": "send_photos",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_referral",
+      "user_message": "(photos attached)",
+      "has_media": true,
+      "success_signals": [
+        "Directly acknowledges the photos",
+        "Does not force feature education first",
+        "Keeps the next action short"
+      ],
+      "failure_signals": [
+        "Long help text before action",
+        "Too many choices before first value",
+        "No hint what happens next"
+      ],
+      "linked_principles": ["P4", "P5", "A2"],
+      "mock_output_pack_ids": ["V1", "T1"]
+    },
+    {
+      "scenario_id": "INIT-E1-A2-01",
+      "track": "initialization",
+      "title": "Referral entry, user asks if this is an app",
+      "persona_id": "P1",
+      "entry_point": "friend_referral",
+      "first_action": "ask_what_is_this",
+      "activation_path": "trust_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_referral",
+      "user_message": "Is this an app? How do I use this?",
+      "has_media": false,
+      "success_signals": [
+        "Answers the confusion directly",
+        "Gives one clear next step",
+        "Does not dump every capability"
+      ],
+      "failure_signals": [
+        "Generic menu-style answer",
+        "Still unclear what to do next",
+        "Too much product explanation"
+      ],
+      "linked_principles": ["P4", "P5", "P6"],
+      "mock_output_pack_ids": ["T5"]
+    },
+    {
+      "scenario_id": "INIT-E1-A3-01",
+      "track": "initialization",
+      "title": "Referral entry, user asks about security",
+      "persona_id": "P5",
+      "entry_point": "friend_referral",
+      "first_action": "ask_security",
+      "activation_path": "trust_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_referral",
+      "user_message": "How do I know this is secure and not spam?",
+      "has_media": false,
+      "success_signals": [
+        "Responds to trust directly",
+        "Avoids sounding defensive",
+        "Still gives a simple next step"
+      ],
+      "failure_signals": [
+        "Dodges the security concern",
+        "Gets overly technical",
+        "Leaves the user with no action"
+      ],
+      "linked_principles": ["P1", "P4", "A2"],
+      "mock_output_pack_ids": ["T5"]
+    },
+    {
+      "scenario_id": "INIT-E2-A5-01",
+      "track": "initialization",
+      "title": "Landing page, user fills form before trying",
+      "persona_id": "P3",
+      "entry_point": "landing_page",
+      "first_action": "complete_onboarding_form",
+      "activation_path": "form_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["landing-page-concept", "/console/form/{token}"],
+      "success_signals": [
+        "Form feels short and justified",
+        "User understands why the form exists",
+        "A clear post-form next step exists"
+      ],
+      "failure_signals": [
+        "Feels like setup before value",
+        "User wonders why trial is blocked by form",
+        "No obvious next action after submit"
+      ],
+      "linked_principles": ["P5", "A2", "A8"],
+      "mock_output_pack_ids": ["T4"]
+    },
+    {
+      "scenario_id": "INIT-E2-A1-01",
+      "track": "initialization",
+      "title": "Landing page, user wants to try video immediately",
+      "persona_id": "P1",
+      "entry_point": "landing_page",
+      "first_action": "send_photos",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["landing-page-concept"],
+      "success_signals": [
+        "Primary CTA clearly points to first trial",
+        "The page does not force the user to choose too much",
+        "The first trial feels low-commitment"
+      ],
+      "failure_signals": [
+        "Competing CTAs confuse the user",
+        "The page teaches instead of activating",
+        "The user still asks what to do"
+      ],
+      "linked_principles": ["P5", "P4"],
+      "mock_output_pack_ids": ["T1"]
+    },
+    {
+      "scenario_id": "INIT-E2-A4-01",
+      "track": "initialization",
+      "title": "Landing page, user wants to try daily insight first",
+      "persona_id": "P3",
+      "entry_point": "landing_page",
+      "first_action": "try_daily_insight",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["landing-page-concept"],
+      "success_signals": [
+        "The page makes it clear that insight-first is allowed",
+        "Trying insight does not feel like a dead-end",
+        "A natural handoff to video exists"
+      ],
+      "failure_signals": [
+        "The page implies video is the only valid first use",
+        "Insight looks like a side feature with no path onward",
+        "The user hesitates between two equal CTAs"
+      ],
+      "linked_principles": ["P3", "P5"],
+      "mock_output_pack_ids": ["I1", "T2"]
+    },
+    {
+      "scenario_id": "INIT-E3-A6-01",
+      "track": "initialization",
+      "title": "Operator interview leads to starter tasks",
+      "persona_id": "P2",
+      "entry_point": "operator_interview",
+      "first_action": "interview_then_execute",
+      "activation_path": "interview_first",
+      "task_plan_type": "task_card",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["interview-notes", "starter-task-concept"],
+      "success_signals": [
+        "The interview feels helpful, not interrogative",
+        "The next tasks are short and concrete",
+        "The task order clearly matches the user's context"
+      ],
+      "failure_signals": [
+        "The interview creates more cognitive load",
+        "The tasks are vague or too many",
+        "The user still does not know where to start"
+      ],
+      "linked_principles": ["P4", "P5", "A2"],
+      "mock_output_pack_ids": ["T3", "T4"]
+    },
+    {
+      "scenario_id": "INIT-E4-A4-01",
+      "track": "initialization",
+      "title": "Natural traffic, new user asks for daily insight",
+      "persona_id": "P3",
+      "entry_point": "direct_message",
+      "first_action": "try_daily_insight",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_natural",
+      "user_message": "daily insight",
+      "has_media": false,
+      "success_signals": [
+        "Allows the new user into the insight path immediately",
+        "Avoids kicking them back to generic welcome",
+        "Keeps the action clear"
+      ],
+      "failure_signals": [
+        "Forces onboarding before any value",
+        "Sends a generic welcome instead of continuing",
+        "Does not clarify what will happen next"
+      ],
+      "linked_principles": ["P3", "P5", "A2"],
+      "mock_output_pack_ids": ["I1", "T2"]
+    },
+    {
+      "scenario_id": "INIT-E4-A1-01",
+      "track": "initialization",
+      "title": "Natural traffic, new user sends photos with no context",
+      "persona_id": "P1",
+      "entry_point": "direct_message",
+      "first_action": "send_photos",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_natural",
+      "user_message": "(photos attached)",
+      "has_media": true,
+      "success_signals": [
+        "Clearly acknowledges the photos",
+        "Keeps the next request minimal",
+        "Does not demand feature understanding first"
+      ],
+      "failure_signals": [
+        "Over-explains the product",
+        "Requests too many fields immediately",
+        "No visible progress toward first value"
+      ],
+      "linked_principles": ["P4", "P5", "A2"],
+      "mock_output_pack_ids": ["V1", "T1"]
+    },
+    {
+      "scenario_id": "INIT-E4-A7-01",
+      "track": "initialization",
+      "title": "Natural traffic, user asks price before trying",
+      "persona_id": "P5",
+      "entry_point": "direct_message",
+      "first_action": "ask_price",
+      "activation_path": "trust_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "live_dialogue",
+      "profile_state": "new",
+      "phone_key": "new_user_natural",
+      "user_message": "How much is this per month?",
+      "has_media": false,
+      "success_signals": [
+        "Treats the ROI question as normal",
+        "Does not become evasive",
+        "Still preserves a trial next step"
+      ],
+      "failure_signals": [
+        "Avoids pricing entirely",
+        "Pushes the user into a trial without answering",
+        "Sounds like a sales script"
+      ],
+      "linked_principles": ["P4", "P5"],
+      "mock_output_pack_ids": ["T5"]
+    },
+    {
+      "scenario_id": "INIT-E2-A8-01",
+      "track": "initialization",
+      "title": "Landing page skim, user does not act",
+      "persona_id": "P5",
+      "entry_point": "landing_page",
+      "first_action": "passive_skim",
+      "activation_path": "trust_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["landing-page-concept"],
+      "success_signals": [
+        "The page makes the first move obvious",
+        "The first move feels low-risk",
+        "Value proposition is clear without over-explaining"
+      ],
+      "failure_signals": [
+        "Too much product information before action",
+        "No clear primary CTA",
+        "Video and insight feel equally vague"
+      ],
+      "linked_principles": ["P4", "P5"],
+      "mock_output_pack_ids": ["T2", "T5"]
+    },
+    {
+      "scenario_id": "INIT-E2-A5-02",
+      "track": "initialization",
+      "title": "User receives onboarding form but resists filling it",
+      "persona_id": "P3",
+      "entry_point": "onboarding_form",
+      "first_action": "resist_form",
+      "activation_path": "trust_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": [
+        "/console/form/{token}",
+        "/console/templates/form_done.html"
+      ],
+      "success_signals": [
+        "User understands the value of filling the form",
+        "There is a fallback path to try before filling everything",
+        "The form feels short and relevant"
+      ],
+      "failure_signals": [
+        "Form looks like work before value",
+        "The user cannot bypass it for a quick trial",
+        "The submit confirmation does not guide the next action"
+      ],
+      "linked_principles": ["P5", "A2"],
+      "mock_output_pack_ids": ["T5"]
+    },
+    {
+      "scenario_id": "VIDEO-P1-01",
+      "track": "video_first",
+      "title": "Video-first path with missing address and price",
+      "persona_id": "P1",
+      "entry_point": "direct_message",
+      "first_action": "send_photos",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["storyboard-message-concept"],
+      "success_signals": [
+        "Missing data is requested in one compact turn",
+        "The agent still sees momentum toward a video",
+        "The request feels necessary, not bureaucratic"
+      ],
+      "failure_signals": [
+        "Asks too many follow-up questions",
+        "Loses the sense of progress",
+        "Reads like form filling"
+      ],
+      "linked_principles": ["P4", "P5", "A2"],
+      "mock_output_pack_ids": ["V1", "V2"]
+    },
+    {
+      "scenario_id": "VIDEO-P1-02",
+      "track": "video_first",
+      "title": "Should sample precede preference collection",
+      "persona_id": "P1",
+      "entry_point": "landing_page",
+      "first_action": "ask_for_sample_first",
+      "activation_path": "video_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["sample-path-concept"],
+      "success_signals": [
+        "A sample reduces hesitation without creating a detour",
+        "Preference collection happens only when useful",
+        "The path still feels short"
+      ],
+      "failure_signals": [
+        "Sample path delays real value",
+        "Preference collection feels premature",
+        "The user does not know when the real trial starts"
+      ],
+      "linked_principles": ["P5", "P6"],
+      "mock_output_pack_ids": ["V1", "T1"]
+    },
+    {
+      "scenario_id": "VIDEO-P1-03",
+      "track": "video_first",
+      "title": "Producing wait rhythm and message tone",
+      "persona_id": "P3",
+      "entry_point": "direct_message",
+      "first_action": "wait_for_video",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["progress-message-concept"],
+      "success_signals": [
+        "The wait feels active, not silent",
+        "Progress feels human and useful",
+        "The user knows roughly what is happening"
+      ],
+      "failure_signals": [
+        "Long silence",
+        "Message sounds like an internal log",
+        "The user wonders if the job is stuck"
+      ],
+      "linked_principles": ["P3", "A2"],
+      "mock_output_pack_ids": ["V4"]
+    },
+    {
+      "scenario_id": "VIDEO-P1-04",
+      "track": "video_first",
+      "title": "Delivery format, caption, hashtags, and next action",
+      "persona_id": "P4",
+      "entry_point": "direct_message",
+      "first_action": "review_delivery",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["delivery-message-concept"],
+      "success_signals": [
+        "The delivery feels polished and easy to scan",
+        "Caption and hashtags feel agent-authored",
+        "The next action is obvious"
+      ],
+      "failure_signals": [
+        "Caption looks AI-generated",
+        "Hashtags feel generic or bloated",
+        "The message is visually cluttered"
+      ],
+      "linked_principles": ["P4", "P5", "A2"],
+      "mock_output_pack_ids": ["V1", "V5", "V8"]
+    },
+    {
+      "scenario_id": "VIDEO-P1-05",
+      "track": "video_first",
+      "title": "Revision phrasing and perceived control",
+      "persona_id": "P2",
+      "entry_point": "direct_message",
+      "first_action": "request_revision",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["feedback-flow-concept"],
+      "success_signals": [
+        "One natural-language change request feels enough",
+        "The user feels heard",
+        "The system explains what will change"
+      ],
+      "failure_signals": [
+        "Feels like filing a ticket",
+        "The user has to restate too much context",
+        "The system's updated output does not match the request"
+      ],
+      "linked_principles": ["P4", "A2", "P6"],
+      "mock_output_pack_ids": ["V7"]
+    },
+    {
+      "scenario_id": "INSIGHT-P2-01",
+      "track": "insight_first",
+      "title": "Insight-first path for a user with no current listing",
+      "persona_id": "P3",
+      "entry_point": "direct_message",
+      "first_action": "try_daily_insight",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["daily-insight-concept"],
+      "success_signals": [
+        "The user can sample content with minimal setup",
+        "The insight looks immediately postable",
+        "The path keeps the door open for video later"
+      ],
+      "failure_signals": [
+        "Insight feels like secondary filler",
+        "The user still has to do too much setup",
+        "There is no conversion path to video"
+      ],
+      "linked_principles": ["P3", "P5"],
+      "mock_output_pack_ids": ["I1", "T2"]
+    },
+    {
+      "scenario_id": "INSIGHT-P2-02",
+      "track": "insight_first",
+      "title": "Insight feels generic and not local",
+      "persona_id": "P2",
+      "entry_point": "direct_message",
+      "first_action": "inspect_insight_quality",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["daily-insight-concept"],
+      "success_signals": [
+        "The evaluator can clearly say why it feels local",
+        "The insight reflects the agent's market",
+        "The topic feels useful this week"
+      ],
+      "failure_signals": [
+        "The insight could belong to any city",
+        "The tone sounds generic",
+        "The user would not post it today"
+      ],
+      "linked_principles": ["P4", "P6"],
+      "mock_output_pack_ids": ["I2", "I4", "I6"]
+    },
+    {
+      "scenario_id": "INSIGHT-P2-03",
+      "track": "insight_first",
+      "title": "Publish / skip / shorter / more professional controls",
+      "persona_id": "P3",
+      "entry_point": "direct_message",
+      "first_action": "refine_or_skip_insight",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["daily-insight-concept"],
+      "success_signals": [
+        "The user can make a quick decision",
+        "The control language is natural",
+        "Skipping does not feel like failure"
+      ],
+      "failure_signals": [
+        "Too many decisions for a small piece of content",
+        "Controls are unclear or feel robotic",
+        "Shortening or tone changes feel unnatural"
+      ],
+      "linked_principles": ["A2", "P5"],
+      "mock_output_pack_ids": ["I3", "I5"]
+    },
+    {
+      "scenario_id": "INSIGHT-P2-04",
+      "track": "insight_first",
+      "title": "Insight-first path converts into video request",
+      "persona_id": "P1",
+      "entry_point": "direct_message",
+      "first_action": "convert_from_insight_to_video",
+      "activation_path": "insight_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["handoff-concept"],
+      "success_signals": [
+        "The handoff feels natural and helpful",
+        "The system uses what it learned in the insight flow",
+        "The user does not feel reset to zero"
+      ],
+      "failure_signals": [
+        "The video path ignores prior context",
+        "The handoff feels like starting over",
+        "The user is asked the same questions again"
+      ],
+      "linked_principles": ["P2", "P6", "A3"],
+      "mock_output_pack_ids": ["I1", "T2"]
+    },
+    {
+      "scenario_id": "LONG-P3-01",
+      "track": "longitudinal",
+      "title": "Third-use path begins to compress",
+      "persona_id": "P1",
+      "entry_point": "direct_message",
+      "first_action": "repeat_video_request",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["profile-memory-concept"],
+      "success_signals": [
+        "Some questions disappear",
+        "The path feels more tailored",
+        "The user notices reduced friction"
+      ],
+      "failure_signals": [
+        "The path feels identical to the first use",
+        "Known preferences are ignored",
+        "No visible sense of progress"
+      ],
+      "linked_principles": ["P2", "P6"],
+      "mock_output_pack_ids": ["T1"]
+    },
+    {
+      "scenario_id": "LONG-P10-01",
+      "track": "longitudinal",
+      "title": "Tenth-use path should not re-ask obvious preferences",
+      "persona_id": "P1",
+      "entry_point": "direct_message",
+      "first_action": "repeat_video_request",
+      "activation_path": "video_first",
+      "task_plan_type": "single_next_step",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["profile-memory-concept"],
+      "success_signals": [
+        "No re-asking of style, language, or obvious defaults",
+        "The user feels recognized",
+        "The system mentions what it already knows when useful"
+      ],
+      "failure_signals": [
+        "The user has to restate known preferences",
+        "The system feels stateless",
+        "No difference from new-user flow"
+      ],
+      "linked_principles": ["P2", "P6", "A8"],
+      "mock_output_pack_ids": ["T1", "T4"]
+    },
+    {
+      "scenario_id": "LONG-P20-01",
+      "track": "longitudinal",
+      "title": "Twentieth-use path should feel like a trusted assistant",
+      "persona_id": "P2",
+      "entry_point": "direct_message",
+      "first_action": "repeat_multi_flow_usage",
+      "activation_path": "interview_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["assistant-maturity-concept"],
+      "success_signals": [
+        "The user would describe the product as a helper, not a tool",
+        "The product feels context-aware across video and insight",
+        "The user trusts it with less explanation"
+      ],
+      "failure_signals": [
+        "Still feels like a tool needing management",
+        "Context does not carry between flows",
+        "The user must think too much each time"
+      ],
+      "linked_principles": ["P2", "P6", "A3"],
+      "mock_output_pack_ids": ["T3", "T4"]
+    },
+    {
+      "scenario_id": "LONG-P20-02",
+      "track": "longitudinal",
+      "title": "Twentieth-use referral willingness",
+      "persona_id": "P5",
+      "entry_point": "direct_message",
+      "first_action": "consider_referral",
+      "activation_path": "trust_first",
+      "task_plan_type": "branch_recommendation",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["assistant-maturity-concept"],
+      "success_signals": [
+        "The evaluator can imagine recommending this to office peers",
+        "The strongest benefit is easy to explain",
+        "No major trust caveat remains"
+      ],
+      "failure_signals": [
+        "The evaluator says 'I'd use it, but not recommend it yet'",
+        "Too much explanation is needed before referral",
+        "Trust caveats still exist"
+      ],
+      "linked_principles": ["P1", "P4", "P6"],
+      "mock_output_pack_ids": ["T3"]
+    },
+    {
+      "scenario_id": "OPS-DASH-01",
+      "track": "operator_ui",
+      "title": "Dashboard supports initialization path management",
+      "persona_id": "P3",
+      "entry_point": "operator_console",
+      "first_action": "review_dashboard",
+      "activation_path": "operator_triage",
+      "task_plan_type": "n_a",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["/console/", "/console/templates/dashboard.html"],
+      "success_signals": [
+        "The operator can quickly tell who is video-ready vs insight-ready",
+        "The next action is inferable from the UI",
+        "Users needing follow-up are easy to spot"
+      ],
+      "failure_signals": [
+        "Readiness looks informative but not actionable",
+        "The dashboard does not expose path choice",
+        "Operators still need to open many profiles to triage"
+      ],
+      "linked_principles": ["A8", "P3", "A2"],
+      "mock_output_pack_ids": []
+    },
+    {
+      "scenario_id": "OPS-CLIENT-01",
+      "track": "operator_ui",
+      "title": "Client detail helps decide the next best action",
+      "persona_id": "P2",
+      "entry_point": "operator_console",
+      "first_action": "review_client_detail",
+      "activation_path": "operator_triage",
+      "task_plan_type": "n_a",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": [
+        "/console/client/{phone}",
+        "/console/templates/client_detail.html"
+      ],
+      "success_signals": [
+        "Missing info is grouped by collection channel",
+        "The operator can decide whether to send form, ask in chat, or start a trial",
+        "The UI hints at the user's likely next path"
+      ],
+      "failure_signals": [
+        "The page is detailed but not decisive",
+        "Collection-source tags do not help action",
+        "The operator still cannot choose video vs insight vs interview"
+      ],
+      "linked_principles": ["A8", "A2", "P5"],
+      "mock_output_pack_ids": []
+    },
+    {
+      "scenario_id": "OPS-ONBOARD-01",
+      "track": "operator_ui",
+      "title": "Onboarding invite and form copy for low-patience agents",
+      "persona_id": "P1",
+      "entry_point": "operator_console",
+      "first_action": "review_onboarding_copy",
+      "activation_path": "operator_triage",
+      "task_plan_type": "n_a",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": ["/console/onboard", "/console/form/{token}"],
+      "success_signals": [
+        "The copy feels lightweight and credible",
+        "The benefit arrives before the burden",
+        "The user understands why the form exists"
+      ],
+      "failure_signals": [
+        "The copy feels tool-centric",
+        "The promise is vague",
+        "The form reads like setup work"
+      ],
+      "linked_principles": ["P4", "P5"],
+      "mock_output_pack_ids": []
+    },
+    {
+      "scenario_id": "OPS-SKILL-01",
+      "track": "operator_ui",
+      "title": "Skill brief editing is usable by non-technical operators",
+      "persona_id": "P4",
+      "entry_point": "operator_console",
+      "first_action": "review_skill_customization",
+      "activation_path": "operator_triage",
+      "task_plan_type": "n_a",
+      "evaluation_mode": "manual_review",
+      "profile_state": "manual",
+      "artifacts": [
+        "/console/client/{phone}",
+        "/console/templates/client_detail.html"
+      ],
+      "success_signals": [
+        "Operators can understand what they are changing",
+        "Customization feels safe and scoped",
+        "The UI does not require engineering context"
+      ],
+      "failure_signals": [
+        "The skill editor looks too internal",
+        "Operators cannot predict the impact of changes",
+        "Customization becomes another burden"
+      ],
+      "linked_principles": ["P5", "A5"],
+      "mock_output_pack_ids": []
+    }
+  ]
+}

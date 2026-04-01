@@ -94,6 +94,35 @@ content %}
   </div>
 </div>
 
+<div class="bg-blue-50 border border-blue-100 rounded-2xl p-6 mb-8 shadow-sm">
+  <div class="text-xs font-bold uppercase tracking-widest text-blue-600 mb-2">
+    建议下一步
+  </div>
+  <div
+    class="flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+  >
+    <div>
+      <div class="text-lg font-bold text-slate-900">
+        {{ guidance.recommended_path_label }}
+      </div>
+      <div class="text-sm text-slate-600 mt-1">
+        {{ guidance.next_best_action }}
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <span
+        class="px-3 py-1.5 rounded-md text-xs font-semibold bg-white text-slate-700 border border-blue-200 shadow-sm"
+        >recommended_path: {{ guidance.recommended_path }}</span
+      >
+      <span
+        class="px-3 py-1.5 rounded-md text-xs font-semibold bg-white text-slate-700 border border-blue-200 shadow-sm"
+        >first_value_seen: {{ "yes" if guidance.activation.first_value_seen else
+        "no" }}</span
+      >
+    </div>
+  </div>
+</div>
+
 <!-- Dimension cards — single column for wider inputs -->
 <div class="flex flex-col gap-4">
   {% for dim in dimensions %}

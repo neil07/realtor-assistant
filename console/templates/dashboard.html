@@ -98,11 +98,21 @@
           >
             就绪
           </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            推荐路径
+          </th>
+          <th
+            class="py-4 px-6 text-xs font-semibold uppercase tracking-wider text-slate-500"
+          >
+            建议下一步
+          </th>
         </tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {% for c in clients %} {% set p = c.profile %} {% set comp =
-        c.completeness %}
+        c.completeness %} {% set guidance = c.guidance %}
         <tr class="hover:bg-slate-50/80 transition-colors group">
           <td class="py-4 px-6">
             <a
@@ -177,6 +187,15 @@
               {% endif %}
             </div>
           </td>
+          <td class="py-4 px-6">
+            <span
+              class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 uppercase tracking-widest"
+              >{{ guidance.recommended_path_label }}</span
+            >
+          </td>
+          <td class="py-4 px-6 text-sm text-slate-600 max-w-sm">
+            {{ guidance.next_best_action }}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -205,7 +224,7 @@
   </div>
   <h3 class="text-xl font-bold text-slate-900 mb-2">暂无客户</h3>
   <p class="text-slate-500 mb-8 text-center max-w-sm leading-relaxed">
-    添加第一位经纪人客户，系统会自动发送 onboarding 表单收集偏好信息。
+    添加第一位经纪人客户。onboarding 表单是可选加速器，不是试用门槛。
   </p>
   <a
     href="/console/onboard"
