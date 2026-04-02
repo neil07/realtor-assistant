@@ -7,6 +7,8 @@
 - Route: `POST $OPENCLAW_CALLBACK_BASE_URL/events`
 - Default local route: `POST http://127.0.0.1:18789/reel-agent/events`
 - Auth header: `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
+- Repo-owned plugin source: `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- Local runtime mount: `~/.openclaw/extensions/reel-agent-bridge`
 
 ## Supported callback types
 
@@ -140,6 +142,7 @@ State updates:
 Bridge state mirror:
 
 - `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+- repo install guide: `/Users/lsy/projects/realtor-social/openclaw/README.md`
 
 At minimum, per-agent state should retain:
 

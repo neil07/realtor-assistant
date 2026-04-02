@@ -4,6 +4,12 @@
 
 ## 0. 环境变量
 
+先确保本机 OpenClaw 接线层已从 repo 安装：
+
+```bash
+/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh
+```
+
 ```bash
 export REEL_AGENT_URL=http://127.0.0.1:8000
 export REEL_AGENT_TOKEN=replace-with-shared-bearer-token
@@ -15,6 +21,11 @@ export MSG_ID=test-msg-001
 ```
 
 `CALLBACK_URL` is the OpenClaw-side business-event bridge for Reel Agent callbacks.
+
+Repo-owned bridge source of truth:
+
+- `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- install / relink via `/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh`
 
 Do not use:
 

@@ -63,6 +63,8 @@ Production API set:
 - `callback_url` must point to the OpenClaw-side business-event bridge
 - For this project the default contract is `POST http://127.0.0.1:18789/reel-agent/events`
 - Set `OPENCLAW_CALLBACK_BASE_URL=http://127.0.0.1:18789/reel-agent`, then backend uses `"$OPENCLAW_CALLBACK_BASE_URL"/events`
+- Repo-owned bridge source lives in `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- Local runtime mount should be refreshed via `/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh`
 - OpenClaw bridge auth uses `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
 - Do not point backend callbacks at `/telegram-webhook`; that path is only for Telegram transport ingress
 - Do not assume `/api/sessions/main/messages` is a supported backend callback endpoint

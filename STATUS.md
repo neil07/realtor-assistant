@@ -20,6 +20,7 @@ alpha 阶段——Reel Agent 2.0 demo-ready dual-closure / OpenClaw 消息主链
 - 已补 mock 联调与路由回归测试：`tests/test_message_routing.py`、`tests/test_openclaw_mock_integration.py`
 - 已沉淀联调文档：`doc/openclaw/MOCK_INTEGRATION.md`、`doc/openclaw/REAL_INTEGRATION.md`
 - 已落地 OpenClaw-side deterministic callback bridge，并把 `last_job_id` 镜像到结构化 state 文件
+- 已将 OpenClaw 接线层 GitHub 化：repo 现在持有 `openclaw/extensions/reel-agent-bridge` 源码与 `scripts/openclaw/install-local-wiring.sh`
 - callback bridge 已完成 smoke test 与隔离验证：错误 secret → `401`，未知 event type → `400`
 - 最新修复 `ceefc62`：补 daily insight post-render 上下文识别，`publish / skip` 可基于 bridge state 正确命中；同时新增 `/health` 活性探针与对应测试
 - 最新修复：`/api/daily-trigger` 的 `Scheduler not ready` 503 已修复（`lifespan` 正确挂全局 `_scheduler`）

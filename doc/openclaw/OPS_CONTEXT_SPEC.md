@@ -7,6 +7,8 @@
 ## State file
 
 - Primary mirror: `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+- Repo-owned bridge source: `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- Local install helper: `/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh`
 
 Top-level shape:
 

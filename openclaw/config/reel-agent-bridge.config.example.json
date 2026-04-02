@@ -1,0 +1,26 @@
+{
+  "plugins": {
+    "load": {
+      "paths": [
+        "~/.openclaw/extensions/reel-agent-bridge"
+      ]
+    },
+    "entries": {
+      "reel-agent-bridge": {
+        "enabled": true,
+        "config": {
+          "callbackSecret": "replace-with-shared-callback-secret",
+          "telegramAccountId": "realtor-social",
+          "repoRoot": "/ABS/PATH/TO/realtor-social",
+          "repoEnvPath": "/ABS/PATH/TO/realtor-social/.env",
+          "workspaceStatePath": "~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json",
+          "mediaLocalRoots": [
+            "/ABS/PATH/TO/realtor-social",
+            "/ABS/PATH/TO/realtor-social/skills/listing-video/output",
+            "/tmp"
+          ]
+        }
+      }
+    }
+  }
+}
