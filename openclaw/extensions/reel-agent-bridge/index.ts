@@ -74,6 +74,13 @@ type PendingListingVideo = {
   updatedAt: string;
 };
 
+type LastListingVideoInput = {
+  firstPhotoPath: string;
+  photoDir: string;
+  style: ListingStyle;
+  updatedAt: string;
+};
+
 type AgentState = {
   agentPhone: string;
   target?: string;
@@ -82,6 +89,7 @@ type AgentState = {
   lastDelivery?: LastDelivery;
   lastDailyInsight?: LastDailyInsight;
   pendingListingVideo?: PendingListingVideo;
+  lastListingVideoInput?: LastListingVideoInput;
   sessionContext?: {
     currentLane?: "listing_video" | "daily_insight" | "onboarding";
     lastSuccessfulPath?: string;
@@ -112,6 +120,8 @@ type RouterDebugEntry = {
     | "handled_daily_publish"
     | "handled_daily_skip"
     | "handled_daily_refine"
+    | "handled_video_publish"
+    | "handled_video_redo"
     | "handled_video_feedback"
     | "handled_listing_photos_auto"
     | "handled_listing_photos_style_request"
@@ -535,6 +545,15 @@ function renderDeliveredText(payload: DeliveredPayload): string {
   return lines.join("\n");
 }
 
+function renderDeliveredPublishText(lastDelivery?: LastDelivery): string {
+  const lines = ["Great choice! Here's your caption for posting 📱"];
+  if (lastDelivery?.caption?.trim()) {
+    lines.push("", lastDelivery.caption.trim());
+  }
+  lines.push("", "If you want another cut, reply with:", "- adjust <what to change>", "- redo");
+  return lines.join("\n");
+}
+
 function renderFailedText(payload: FailedPayload): string {
   const lines = ["⚠️ The video job failed."];
   if (payload.error?.trim()) {
@@ -644,6 +663,17 @@ async function startListingVideoJob(
   });
 }
 
+async function restartListingVideoJob(
+  backend: BackendConfig,
+  senderId: string,
+  lastInput: LastListingVideoInput | undefined,
+): Promise<{ job_id: string; status: string } | undefined> {
+  if (!lastInput?.firstPhotoPath || !lastInput.style) {
+    return undefined;
+  }
+  return startListingVideoJob(backend, senderId, lastInput.firstPhotoPath, lastInput.style);
+}
+
 function isStopPush(text: string): boolean {
   return ["stop push", "pause push", "disable daily"].some((token) => text.includes(token));
 }
@@ -654,6 +684,10 @@ function isResumePush(text: string): boolean {
 
 function isPublish(text: string): boolean {
   return ["publish", "post"].includes(text);
+}
+
+function isRedo(text: string): boolean {
+  return ["redo", "again"].includes(text);
 }
 
 function isSkip(text: string): boolean {
@@ -986,6 +1020,12 @@ async function handleRouterMessage(
       const job = await startListingVideoJob(backend, senderId, mediaPath, profileStyle);
       upsertAgentState(state, senderId, binding, {
         lastJobId: typeof job?.job_id === "string" ? job.job_id : agentState?.lastJobId,
+        lastListingVideoInput: {
+          firstPhotoPath: mediaPath,
+          photoDir,
+          style: profileStyle,
+          updatedAt: nowIso(),
+        },
         pendingListingVideo: undefined,
         sessionContext: {
           ...sessionContext,
@@ -1056,6 +1096,12 @@ async function handleRouterMessage(
     const job = await startListingVideoJob(backend, senderId, pendingListing.firstPhotoPath, pendingListing.style);
     upsertAgentState(state, senderId, binding, {
       lastJobId: typeof job?.job_id === "string" ? job.job_id : agentState?.lastJobId,
+      lastListingVideoInput: {
+        firstPhotoPath: pendingListing.firstPhotoPath,
+        photoDir: pendingListing.photoDir,
+        style: pendingListing.style,
+        updatedAt: nowIso(),
+      },
       pendingListingVideo: undefined,
       sessionContext: {
         ...sessionContext,
@@ -1183,6 +1229,46 @@ async function handleRouterMessage(
   }
 
   if (sessionContext.lastPostRenderKind === "delivered" && agentState?.lastJobId) {
+    if (isPublish(text)) {
+      upsertAgentState(state, senderId, binding, {
+        sessionContext: {
+          ...sessionContext,
+          currentLane: "listing_video",
+          lastSuccessfulPath: "listing_video.published",
+        },
+      });
+      return {
+        handled: true,
+        text: renderDeliveredPublishText(agentState?.lastDelivery),
+        reason: "handled_video_publish",
+        normalizedText: text,
+      };
+    }
+    if (isRedo(text)) {
+      const job = await restartListingVideoJob(backend, senderId, agentState?.lastListingVideoInput);
+      if (!job) {
+        return {
+          handled: true,
+          text: "I don't have the last photo set on hand yet. Please send the listing photos again and I'll restart from scratch. 🔄",
+          reason: "handled_video_redo",
+          normalizedText: text,
+        };
+      }
+      upsertAgentState(state, senderId, binding, {
+        lastJobId: typeof job?.job_id === "string" ? job.job_id : agentState?.lastJobId,
+        sessionContext: {
+          ...sessionContext,
+          currentLane: "listing_video",
+          lastSuccessfulPath: "listing_video.redo_started",
+        },
+      });
+      return {
+        handled: true,
+        text: "Starting from scratch with your photos... 🔄",
+        reason: "handled_video_redo",
+        normalizedText: text,
+      };
+    }
     await backendFetchJson(backend, "/webhook/feedback", {
       method: "POST",
       body: JSON.stringify({
