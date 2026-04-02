@@ -27,7 +27,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
@@ -81,7 +81,7 @@ _scheduler = None
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global _job_mgr, _dispatcher
+    global _job_mgr, _dispatcher, _scheduler
 
     from agent.callback_client import CallbackClient
     from orchestrator.daily_scheduler import DailyScheduler
@@ -386,6 +386,15 @@ def _load_review_summary(output_dir: str | None) -> dict | None:
             "narrative": data.get("narrative"),
         }
 
+    return None
+
+
+def _coerce_current_insight(payload: Any, bridge_agent_state: dict | None) -> dict | None:
+    """Resolve the current daily insight object from request payload or bridge state."""
+    if payload.current_insight:
+        return payload.current_insight
+    if bridge_agent_state and isinstance(bridge_agent_state.get("lastDailyInsight"), dict):
+        return bridge_agent_state["lastDailyInsight"]
     return None
 
 
@@ -835,10 +844,14 @@ class WebhookPayload(BaseModel):
 
 
 class FeedbackPayload(BaseModel):
-    job_id: str
+    job_id: str | None = None
     agent_phone: str
     feedback_text: str  # raw text from WhatsApp ("换个更活泼的音乐")
     revision_round: int = 1
+    feedback_scope: Literal["video", "insight"] = "video"
+    current_insight: dict[str, Any] | None = None
+    callback_url: str | None = None
+    agent_name: str | None = None
 
 
 class MessagePayload(BaseModel):
@@ -991,18 +1004,14 @@ _SUPPORTED_DAILY_INSIGHT_REFINEMENTS = {
 # Welcome message + capability framing (first-contact)
 _WELCOME_MSG = (
     "Hey! I'm Reel Agent 🎬\n\n"
-    "I do two things for you:\n"
-    "1. Send me listing photos → I make a video\n"
-    "2. Every morning → ready-to-post market content\n\n"
-    "To start: just send your listing photos!"
+    "This isn't a big app flow — just send listing photos and I'll turn them into a video, or say 'daily insight' for ready-to-post market content.\n\n"
+    "Best first step: send 6-10 listing photos."
 )
 
 _WELCOME_MSG_ZH = (
     "你好！我是 Reel Agent 🎬\n\n"
-    "我帮你做两件事：\n"
-    "1. 发房源照片给我 → 我帮你做视频\n"
-    "2. 每天早上 → 推送可直接发布的市场资讯\n\n"
-    "开始：直接发照片给我就行！"
+    "这不是那种复杂 App 流程——你直接发房源照片，我就帮你做成视频；或者说 'daily insight'，我给你可直接发布的市场资讯。\n\n"
+    "最好的第一步：直接发 6-10 张房源照片。"
 )
 
 
@@ -1564,18 +1573,82 @@ async def webhook_feedback(
     _auth: None = Depends(_require_backend_auth),
 ):
     """
-    OpenClaw calls this when an agent provides revision feedback after video delivery.
-    Classifies the feedback, updates the agent's preference profile,
-    and queues a new revision job starting from the right step.
+    OpenClaw calls this when an agent provides post-render feedback.
 
-    Returns: {job_id, re_run_from, classified} so OpenClaw can track the new job.
+    Supported scopes:
+    - video: revision feedback after video delivery (queues a new video job)
+    - insight: refine the current daily insight (returns refined content and can re-push callback)
     """
-    job_mgr = _get_job_mgr()
-    dispatcher = _get_dispatcher()
-
     # Imports available via top-level sys.path.insert (line ~42)
     import feedback_classifier
+    import generate_daily_insight
     import profile_manager
+    import render_insight_image
+
+    from agent.callback_client import CallbackClient
+    from orchestrator.progress_notifier import _make_image_url
+
+    if payload.feedback_scope == "insight":
+        bridge_agent_state = _read_bridge_agent_state(payload.agent_phone)
+        current_insight = _coerce_current_insight(payload, bridge_agent_state)
+        if not current_insight:
+            raise HTTPException(400, "current_insight is required for insight feedback")
+
+        profile = await asyncio.to_thread(profile_manager.get_profile, payload.agent_phone)
+        agent_name = payload.agent_name or (profile or {}).get("name", "")
+        refined = await asyncio.to_thread(
+            generate_daily_insight.refine,
+            current_insight,
+            payload.feedback_text,
+            agent_name,
+        )
+
+        branding_colors = None
+        if profile:
+            branding_colors = profile.get("content_preferences", {}).get("branding_colors")
+
+        output_dir = OUTPUT_BASE / f"daily_refine_{payload.agent_phone}_{uuid.uuid4().hex[:8]}"
+        image_paths = await asyncio.to_thread(
+            render_insight_image.render_all_formats,
+            refined.get("headline", "Daily Insight"),
+            refined.get("body", refined.get("caption", "")),
+            agent_name or "Reel Agent",
+            str(output_dir),
+            branding_colors,
+        )
+
+        if payload.callback_url:
+            image_urls = {fmt: _make_image_url(file_path) for fmt, file_path in image_paths.items()}
+            await CallbackClient().send(
+                payload.callback_url,
+                {
+                    "type": "daily_insight",
+                    "agent_phone": payload.agent_phone,
+                    "insight": {
+                        "topic": refined.get("topic", ""),
+                        "headline": refined.get("headline", ""),
+                        "caption": refined.get("caption", ""),
+                        "hashtags": refined.get("hashtags", []),
+                        "cta": refined.get("cta", ""),
+                        "content_type": refined.get("content_type", "market_stat"),
+                    },
+                    "image_urls": image_urls,
+                    "agent_name": agent_name,
+                },
+            )
+
+        return {
+            "feedback_scope": "insight",
+            "status": "DELIVERED",
+            "insight": refined,
+            "image_paths": image_paths,
+        }
+
+    if not payload.job_id:
+        raise HTTPException(400, "job_id is required for video feedback")
+
+    job_mgr = _get_job_mgr()
+    dispatcher = _get_dispatcher()
 
     # 1. Classify the feedback
     classified = await asyncio.to_thread(feedback_classifier.classify, payload.feedback_text)
@@ -1619,6 +1692,7 @@ async def webhook_feedback(
     await dispatcher.submit(new_job_id)
 
     return {
+        "feedback_scope": "video",
         "job_id": new_job_id,
         "parent_job_id": payload.job_id,
         "re_run_from": re_run_from,

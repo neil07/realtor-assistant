@@ -2,6 +2,17 @@
 
 > How OpenClaw should render each callback type from Reel Agent backend.
 > Covers development-checklist Section 5.E (渲染前校验).
+> Updated: 2026-04-02
+
+---
+
+## Bridge Contract
+
+- Route: `POST $OPENCLAW_CALLBACK_BASE_URL/events`
+- Default local route: `POST http://127.0.0.1:18789/reel-agent/events`
+- Auth header: `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
+- Repo-owned plugin source: `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- Local runtime mount: `~/.openclaw/extensions/reel-agent-bridge`
 
 ---
 
@@ -21,8 +32,6 @@ Reel Agent backend sends these callback types to `$OPENCLAW_CALLBACK_BASE_URL/ev
 | `script_preview`   | Once per job (optional) | Yes            | No                              |
 | `onboarding_form`  | Once per new user       | Yes            | No                              |
 | `form_completed`   | Once per user           | Internal       | No                              |
-
-Auth header: `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
 
 ---
 
@@ -62,6 +71,13 @@ Payload:
 3. Show follow-up buttons: **publish** / **adjust** / **redo**
 4. Update session: `last_job_id = job_id`, `lane = delivered`
 
+**State updates:**
+
+- refresh `last_job_id`
+- write `lastDelivery`
+- mark `sessionContext.currentLane = listing_video`
+- mark `sessionContext.starterTaskCompleted = true`
+
 ---
 
 ### `daily_insight` callback (CRITICAL)
@@ -98,6 +114,12 @@ Payload:
 | `insight.caption`  | Non-empty string                    | **BLOCK delivery.** Log: `[INSIGHT_BLOCKED] Missing caption for {agent_phone}`. Do NOT send anything to user.  |
 | `image_urls`       | At least one key with non-empty URL | **BLOCK delivery.** Log: `[INSIGHT_BLOCKED] Missing image for {agent_phone}`. Do NOT send anything to user.    |
 
+If any required field is missing:
+
+- **do not render to user**
+- return 400 / internal error at bridge
+- treat as an ops-visible callback contract failure
+
 **If all validation passes — render:**
 
 1. Send the image (`story_1080x1920` preferred, fallback to any available format).
@@ -110,6 +132,12 @@ Payload:
 4. Update session: `last_daily_insight = payload`, `lane = daily_insight`
 
 **Do NOT show:** any other refinement options, buttons, or text commands beyond these 4.
+
+**State updates:**
+
+- write `lastDailyInsight`
+- mark `sessionContext.currentLane = daily_insight`
+- mark `sessionContext.lastSuccessfulPath = daily_insight.rendered`
 
 ---
 
@@ -143,6 +171,10 @@ Payload:
 
 If `message` is empty, use: "Working on your video..."
 
+**State updates:**
+
+- preserve `job_id` in bridge state as `last_job_id`
+
 ---
 
 ### `failed` callback
@@ -167,6 +199,11 @@ Payload:
 **Do NOT:** expose `error` text, `override_url`, or `retry_count` to the user.
 
 **Internal:** Log the full payload for ops. If `retry_count >= 3`, escalate to operator alert.
+
+**State updates:**
+
+- refresh `last_job_id`
+- mark `sessionContext.lastPostRenderKind = failed`
 
 ---
 
@@ -279,6 +316,30 @@ Payload:
 
 ---
 
+## Target Resolution Order
+
+1. `openclaw_msg_id -> routesByMessageId`
+2. `agent_phone -> routesByPhone`
+3. `agent_phone -> agents[phone].target`
+
+---
+
+## State File
+
+Bridge state mirror:
+
+- `~/.openclaw/workspace-realtor-social/.openclaw/reel-agent-bridge-state.json`
+- repo install guide: `/Users/lsy/projects/realtor-social/openclaw/README.md`
+
+At minimum, per-agent state should retain:
+
+- `lastJobId`
+- `lastDelivery`
+- `lastDailyInsight`
+- `sessionContext`
+
+---
+
 ## Tone Guidelines
 
 All user-facing messages should:
@@ -288,3 +349,14 @@ All user-facing messages should:
 - Use casual professional tone (matching SOUL.md personality)
 - Include emoji sparingly (1-2 per message max)
 - Never expose technical terms (job_id, callback, payload, API, override_url)
+
+---
+
+## Go / No-Go Relevance
+
+Telegram walkthrough 不通过的高风险点主要就是这 4 类：
+
+1. callback 根本没进 bridge
+2. `last_job_id` 没刷新
+3. `daily_insight` 缺字段却还发给了用户
+4. 用户态 delivered / daily insight 渲染和 follow-up 不对

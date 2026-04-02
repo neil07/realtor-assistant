@@ -4,9 +4,10 @@
 
 name: reel-agent-backend
 description: |
-Connect to Reel Agent backend for production pipeline dispatch, revision feedback,
-profile lookup, daily insight triggering, and callback consumption.
-trigger: user sends any message; OpenClaw Router Skill decides which backend API to call
+Connect to Reel Agent backend for OpenClaw-directed production routing,
+property-content kickoff, listing-video generation, revision feedback,
+daily insight refinement, and daily insight push control.
+trigger: user sends any message; production intent is classified by the OpenClaw Router Skill
 requires:
 env: - REEL_AGENT_URL - REEL_AGENT_TOKEN - AGENT_PHONE - CALLBACK_URL
 bins: - curl - jq
@@ -33,7 +34,12 @@ These endpoints are for local audits and regression tests only. Do not put produ
 
 ---
 
-## Skill 0: Router (OpenClaw side)
+## Skill 0: Production Routing (Router Skill-owned)
+
+Production routing is now owned by the OpenClaw Router Skill.
+Use the backend APIs below directly from OpenClaw after the Router Skill decides the lane.
+
+`/api/message` is still available as a regression oracle during testing, but it is not the production entrypoint.
 
 For every inbound user message:
 
@@ -94,6 +100,13 @@ Use this before deciding whether to:
 
 ## Skill 2: Start Video Generation
 
+Call after parameters are confirmed, or immediately when Skill 0 returns `auto_generate == true`.
+
+Notes:
+
+- On the Telegram/media ingress path, OpenClaw may send only the first local image path in `photo_paths`.
+- Backend derives the actual `photo_dir` from `photo_paths[0]`, so a single local path is enough to start generation.
+
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/in" \
   -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
@@ -123,7 +136,9 @@ Notes:
 
 ---
 
-## Skill 3: Submit Revision Feedback
+## Skill 3: Submit Feedback
+
+Video revision after `delivered`:
 
 ```bash
 curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
@@ -133,11 +148,29 @@ curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
     "job_id": "'"$LAST_JOB_ID"'",
     "agent_phone": "'"$AGENT_PHONE"'",
     "feedback_text": "'"$FEEDBACK_TEXT"'",
-    "revision_round": '"$REVISION_ROUND"'
+    "revision_round": '"$REVISION_ROUND"',
+    "feedback_scope": "video"
   }'
 ```
 
 Keep revision text inside the revision session. Do not bounce users into generic style selection after a delivered video.
+
+Daily insight refinement after `daily_insight` render:
+
+```bash
+curl -s -X POST "$REEL_AGENT_URL/webhook/feedback" \
+  -H "Authorization: Bearer $REEL_AGENT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_phone": "'"$AGENT_PHONE"'",
+    "feedback_text": "shorter",
+    "feedback_scope": "insight",
+    "callback_url": "'"$CALLBACK_URL"'"
+  }'
+```
+
+For `feedback_scope=insight`, backend will refine the latest insight object and can re-push a fresh `daily_insight` callback.
+Update `last_job_id` if the backend returns a new video revision job id.
 
 ---
 
@@ -194,6 +227,14 @@ Supported backend-safe follow-ups after daily insight delivery:
 - `skip`
 - `shorter`
 - `more professional`
+
+### Callback rendering follow-ups
+
+- For `delivered`: `publish / adjust / redo`
+- For `daily_insight`: `publish / skip / shorter / more professional`
+- For `failed`: ask user to resend photos or retry later
+- If `openclaw_msg_id` is present, bridge should prefer `openclaw_msg_id -> Telegram target`
+- If `openclaw_msg_id` is absent, bridge may fall back to `agent_phone -> Telegram DM target`
 
 ---
 

@@ -4,6 +4,12 @@
 
 ## 0. 环境变量
 
+先确保本机 OpenClaw 接线层已从 repo 安装：
+
+```bash
+/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh
+```
+
 ```bash
 export REEL_AGENT_URL=http://127.0.0.1:8000
 export REEL_AGENT_TOKEN=replace-with-shared-bearer-token
@@ -13,6 +19,20 @@ export OPENCLAW_CALLBACK_SECRET=replace-with-shared-callback-secret
 export CALLBACK_URL="$OPENCLAW_CALLBACK_BASE_URL/events"
 export MSG_ID=test-msg-001
 ```
+
+---
+
+Repo-owned bridge source of truth:
+
+- `/Users/lsy/projects/realtor-social/openclaw/extensions/reel-agent-bridge`
+- install / relink via `/Users/lsy/projects/realtor-social/scripts/openclaw/install-local-wiring.sh`
+
+Do not use:
+
+- Telegram transport webhook paths such as `/telegram-webhook`
+- `"$OPENCLAW_GATEWAY_URL"/api/sessions/main/messages`
+
+Bridge auth: `X-Reel-Secret: $OPENCLAW_CALLBACK_SECRET`
 
 ---
 

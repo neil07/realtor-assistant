@@ -76,13 +76,14 @@
 
 ---
 
-### D9: Intent Routing 归 OpenClaw Router Skill，`/api/message` 降级为测试入口
+### D9: 生产态意图识别归 OpenClaw Router Skill，`/api/message` 降级为 test-only baseline
 
-- **时间：** 2026-04-01
-- **原因：** 当前架构存在双层意图识别——OpenClaw（LLM，真正理解自然语言）先理解了用户意图，再调用我们后端的 `/api/message`（关键词匹配）二次确认。这意味着：(1) LLM 能力被关键词层截断，复杂表达（"sellers accepted offer, help me prep content"）会被错误分类；(2) 多一个节点就多一个故障点；(3) 维护两套意图识别规则（OpenClaw system prompt + 关键词字典）
+- **时间：** 2026-04-01 初版，2026-04-02 定稿
+- **原因：** 当前架构存在双层意图识别——OpenClaw（LLM，真正理解自然语言）先理解了用户意图，再调用我们后端的 `/api/message`（关键词匹配）二次确认。这意味着：(1) LLM 能力被关键词层截断，复杂表达（"sellers accepted offer, help me prep content"）会被错误分类；(2) 多一个节点就多一个故障点；(3) 维护两套意图识别规则（OpenClaw system prompt + 关键词字典）。思远要求端到端体验完整产品流程，且生产态意图识别本就应该位于 OpenClaw。
 - **影响：**
   - **OpenClaw 侧**：在 `AGENTS.md` / `SKILL.md` 中新增 Router Skill，明确规定各场景的路由规则（has_media → `/webhook/in`，revision text → `/webhook/feedback`，etc.）
   - **后端侧**：`/api/message` 端点保留但标记为 `[TEST-ONLY]`，生产流量不走此路径；新增 `/api/router-test` 别名供调试
   - **生产后端只需 4 个 webhook**：`/webhook/in`、`/webhook/feedback`、`/api/profile/{phone}`、`/api/daily-trigger`
-- **时机：** P5 集成阶段——OpenClaw 入站 webhook 规格确认后实施
-- **出处：** server.py `_classify_intent()`，产品架构讨论 2026-04-01
+  - 生产态由 OpenClaw Router Skill 直接判定 trust-first / property-content / listing-video / revision / daily-insight / push-control 等路径
+- **补充：** daily insight follow-up 扩展为 `publish / skip / shorter / more professional`；其中 `shorter / more professional` 通过 `/webhook/feedback` 的 insight refinement 模式承接，不新增第 5 个生产 API
+- **出处：** server.py `_classify_intent()`，产品架构讨论 2026-04-01，2026-04-02 思远拍板 + `MINI_HANDOFF.md`

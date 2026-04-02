@@ -1,0 +1,57 @@
+{
+  "id": "reel-agent-bridge",
+  "name": "Reel Agent Bridge",
+  "description": "Deterministic OpenClaw event bridge for Reel Agent callbacks",
+  "version": "1.1.0",
+  "uiHints": {
+    "callbackSecret": {
+      "label": "Callback Secret",
+      "help": "Shared secret expected in X-Reel-Secret from Reel Agent",
+      "sensitive": true
+    },
+    "telegramAccountId": {
+      "label": "Telegram Account ID",
+      "help": "Telegram account used for outbound Reel Agent notifications"
+    },
+    "workspaceStatePath": {
+      "label": "Workspace State Path",
+      "help": "Optional mirror file readable by the realtor-social workspace"
+    },
+    "repoRoot": {
+      "label": "Repo Root",
+      "help": "Absolute path to the realtor-social repository on this machine"
+    },
+    "repoEnvPath": {
+      "label": "Repo Env Path",
+      "help": "Optional .env path for Reel Agent backend credentials"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "callbackSecret": {
+        "type": "string"
+      },
+      "telegramAccountId": {
+        "type": "string"
+      },
+      "repoRoot": {
+        "type": "string"
+      },
+      "repoEnvPath": {
+        "type": "string"
+      },
+      "workspaceStatePath": {
+        "type": "string"
+      },
+      "mediaLocalRoots": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": ["callbackSecret"]
+  }
+}

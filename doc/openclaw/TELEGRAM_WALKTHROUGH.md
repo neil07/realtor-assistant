@@ -6,7 +6,7 @@
 
 全部满足才允许通知人工去 Telegram：
 
-- [ ] G1 OpenClaw Router Skill owns inbound intent recognition and calls production APIs directly
+- [ ] G1 OpenClaw Router Skill owns production intent classification and calls production APIs directly; `/api/message` is test-only baseline
   - **Status:** Router Skill prompt ready (`doc/openclaw/ROUTER_SKILL_PROMPT.md`). Pending: deploy to mini runtime.
 - [ ] G2 OpenClaw side can call `/webhook/in` and `/webhook/feedback` with valid Bearer token
   - **Status:** Backend APIs fully implemented and tested (49 tests passing). Pending: mini-side HTTP client setup.
@@ -68,6 +68,7 @@ User sends:
 
 Expected:
 
+- OpenClaw Router Skill directly recognizes the listing-photo path
 - If style already exists → OpenClaw calls `/webhook/in` immediately
 - If style is missing → bot asks for style, then waits for `go / ok / yes`
 - Returned `job_id` is stored as `last_job_id`
@@ -120,6 +121,8 @@ Expected render:
 - follow-up controls:
   - `publish`
   - `skip`
+  - `shorter`
+  - `more professional`
 
 ### T8. Daily push controls
 

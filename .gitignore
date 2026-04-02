@@ -34,3 +34,6 @@ skills/listing-video/profiles/briefs/
 
 # Playwright MCP 本地状态
 .playwright-mcp/
+
+# Repo-owned OpenClaw wiring local deps
+openclaw/extensions/*/node_modules/

@@ -76,6 +76,17 @@ class RecordingAsyncClient:
         return FakeHttpxResponse()
 
 
+class StubRenderInsightImage:
+    @staticmethod
+    def render_all_formats(headline: str, body: str, agent_name: str, output_dir: str, branding_colors=None):
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        story = Path(output_dir) / "story_1080x1920.jpg"
+        feed = Path(output_dir) / "feed_1080x1080.jpg"
+        story.write_text(f"{headline}\n{body}", encoding="utf-8")
+        feed.write_text(f"{headline}\n{body}", encoding="utf-8")
+        return {"story_1080x1920": str(story), "feed_1080x1080": str(feed)}
+
+
 def test_api_message_requires_bearer_token_when_configured(monkeypatch) -> None:
     import profile_manager
 
@@ -390,6 +401,79 @@ def test_webhook_in_generation_path_creates_job_and_submits(monkeypatch) -> None
         }
     ]
     assert fake_dispatcher.submitted == ["job-new"]
+
+
+def test_webhook_feedback_refines_daily_insight_and_repushes_callback(monkeypatch, tmp_path) -> None:
+    import generate_daily_insight
+    import profile_manager
+    import render_insight_image
+
+    monkeypatch.setenv("REEL_AGENT_TOKEN", "test-token")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://reel-agent.example")
+    state_path = tmp_path / "bridge-state.json"
+    state_path.write_text(
+        dumps(
+            {
+                "agents": {
+                    "+10000000000": {
+                        "agentPhone": "+10000000000",
+                        "lastDailyInsight": {
+                            "topic": "inventory",
+                            "headline": "Inventory is tightening",
+                            "caption": "Inventory is down this week.",
+                            "hashtags": ["#realestate"],
+                            "content_type": "market_stat",
+                            "cta": "DM me for details",
+                            "updatedAt": "2026-04-01T03:00:00+00:00"
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "DEFAULT_BRIDGE_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        profile_manager,
+        "get_profile",
+        lambda phone: {"name": "Natalie", "content_preferences": {"branding_colors": ["#111111", "#222222"]}},
+    )
+    monkeypatch.setattr(
+        generate_daily_insight,
+        "refine",
+        lambda current_insight, feedback_text, agent_name="": {
+            **current_insight,
+            "headline": "Shorter market update",
+            "body": "A tighter body",
+            "caption": "A shorter, more professional caption.",
+        },
+    )
+    monkeypatch.setattr(render_insight_image, "render_all_formats", StubRenderInsightImage.render_all_formats)
+    RecordingAsyncClient.calls = []
+    monkeypatch.setattr(callback_client_module.httpx, "AsyncClient", RecordingAsyncClient)
+
+    client = TestClient(server.app)
+    response = client.post(
+        "/webhook/feedback",
+        headers={"Authorization": "Bearer test-token"},
+        json={
+            "agent_phone": "+10000000000",
+            "feedback_text": "shorter",
+            "feedback_scope": "insight",
+            "callback_url": "https://openclaw.example/reel-agent/events",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feedback_scope"] == "insight"
+    assert body["status"] == "DELIVERED"
+    assert body["insight"]["headline"] == "Shorter market update"
+    assert len(RecordingAsyncClient.calls) == 1
+    callback = RecordingAsyncClient.calls[0]
+    assert callback["url"] == "https://openclaw.example/reel-agent/events"
+    assert callback["json"]["type"] == "daily_insight"
+    assert callback["json"]["insight"]["caption"] == "A shorter, more professional caption."
 
 
 def test_progress_notifier_uses_openclaw_events_contract(monkeypatch) -> None:
