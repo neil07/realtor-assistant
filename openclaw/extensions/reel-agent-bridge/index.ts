@@ -736,7 +736,7 @@ function renderDailyInsightText(payload: DailyInsightPayload): string {
   if (insight.cta?.trim()) {
     lines.push("", `CTA: ${insight.cta.trim()}`);
   }
-  lines.push("", "Reply with:", "- publish", "- skip");
+  lines.push("", "Reply with:", "- publish", "- skip", "- shorter", "- more professional");
   return lines.join("\n");
 }
 
