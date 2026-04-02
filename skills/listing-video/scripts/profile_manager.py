@@ -5,6 +5,7 @@ Stores and retrieves per-agent preferences, voice clones, and usage stats.
 """
 
 import json
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,20 @@ def _profile_path(phone: str) -> Path:
     """Sanitize phone number and return profile file path."""
     safe_phone = "".join(c for c in phone if c.isdigit() or c == "+")
     return PROFILES_DIR / f"{safe_phone}.json"
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Write JSON atomically: tmp file + rename to prevent corruption."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(data, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        Path(tmp).replace(path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def get_profile(phone: str) -> dict | None:
@@ -133,7 +148,7 @@ def create_profile(
     }
 
     _ensure_profile_defaults(profile)
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
     return profile
 
 
@@ -154,7 +169,7 @@ def update_profile(phone: str, updates: dict) -> dict:
     _ensure_profile_defaults(profile)
     profile["stats"]["last_use"] = datetime.now().isoformat()
 
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
     return profile
 
 
@@ -170,7 +185,7 @@ def increment_video_count(phone: str) -> int:
     profile["activation"]["first_value_seen"] = True
     profile["activation"]["last_successful_path"] = "video_first"
 
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
     return profile["stats"]["videos_created"]
 
 
@@ -245,7 +260,7 @@ def record_feedback(
         profile["learned_patterns"]["frequently_requested"] = frequent[-10:]
 
     profile["stats"]["last_use"] = datetime.now().isoformat()
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
     return profile
 
 
@@ -271,7 +286,7 @@ def record_positive_signal(phone: str, style: str) -> None:
         confirmed.append(style)
 
     profile.setdefault("stats", {})["last_use"] = datetime.now().isoformat()
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
 
 
 def get_active_agents(days: int = 7) -> list[dict]:
@@ -352,7 +367,7 @@ def add_market_knowledge(phone: str, key: str, value: str) -> dict:
         return {"status": "error", "message": "Profile not found"}
 
     profile.setdefault("market_knowledge", {})[key] = value
-    _profile_path(phone).write_text(json.dumps(profile, indent=2))
+    _atomic_write_json(_profile_path(phone), profile)
     return profile
 
 

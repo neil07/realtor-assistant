@@ -27,8 +27,8 @@ import requests
 
 IMA_BASE_URL = "https://api.imastudio.com"
 IMA_UPLOAD_URL = "https://imapi.liveme.com"
-APP_ID = "webAgent"
-APP_KEY = "32jdskjdk320eew"
+APP_ID = os.environ.get("IMA_APP_ID", "")
+APP_KEY = os.environ.get("IMA_APP_KEY", "")
 
 VIDEO_MAX_WAIT = 5 * 60    # 5 min — fail fast to Ken Burns fallback
 TTS_MAX_WAIT = 5 * 60      # 5 min
@@ -56,6 +56,11 @@ def _make_headers(api_key: str) -> dict:
 
 def _gen_sign() -> tuple[str, str, str]:
     """Generate (sign, timestamp, nonce) for OSS upload auth."""
+    if not APP_ID or not APP_KEY:
+        raise RuntimeError(
+            "IMA_APP_ID and IMA_APP_KEY must be set in environment. "
+            "See .env.example for details."
+        )
     nonce = uuid.uuid4().hex[:21]
     ts = str(int(time.time()))
     raw = f"{APP_ID}|{APP_KEY}|{ts}|{nonce}"

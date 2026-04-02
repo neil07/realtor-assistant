@@ -29,8 +29,11 @@ if TYPE_CHECKING:
 SCRIPTS_DIR = Path(__file__).parent.parent / "skills" / "listing-video" / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Quality gate: auto-retry once if overall_score < this threshold
-AUTO_RETRY_THRESHOLD = 6.5
+# Quality gate: auto-retry once if overall_score < this threshold.
+# Set to 4.0 (aligned with DELIVERY_BLOCK_THRESHOLD) because per-clip quality
+# gates in render_ai_video.py now handle clip-level variance upstream.
+# Whole-video retry is reserved for systemic failures only.
+AUTO_RETRY_THRESHOLD = float(os.getenv("AUTO_RETRY_THRESHOLD", "4.0"))
 
 # Delivery block: best version scores below this → block delivery, notify user
 DELIVERY_BLOCK_THRESHOLD = float(os.getenv("DELIVERY_BLOCK_THRESHOLD", "4.0"))
@@ -38,6 +41,12 @@ DELIVERY_BLOCK_THRESHOLD = float(os.getenv("DELIVERY_BLOCK_THRESHOLD", "4.0"))
 # Max words per scene narration (~15 words ≈ 4s at 3.75 wps)
 # Prevents a single scene from dominating the total video duration
 MAX_WORDS_PER_SCENE = 15
+
+
+# Default timeout for blocking pipeline steps wrapped in asyncio.to_thread.
+# Individual steps can override (e.g. render is slower than analysis).
+STEP_TIMEOUT_SECS = int(os.getenv("PIPELINE_STEP_TIMEOUT", "600"))  # 10 min
+RENDER_TIMEOUT_SECS = int(os.getenv("PIPELINE_RENDER_TIMEOUT", "900"))  # 15 min
 
 
 class QualityGateError(Exception):
@@ -164,6 +173,13 @@ class Dispatcher:
             await self._run_steps(job_id, job, params)
         except asyncio.CancelledError:
             await self.job_mgr.mark_cancelled(job_id)
+        except TimeoutError:
+            # Re-read job to get current_step for the error message
+            current = await self.job_mgr.get_job(job_id)
+            step = (current or {}).get("current_step", "unknown")
+            error = f"Pipeline timed out at step '{step}'"
+            await self.job_mgr.mark_failed(job_id, error, retry_count=0)
+            await self.notifier.notify_failed(job_id, error, job)
         except QualityGateError as exc:
             # Critical quality gate — mark failed with clear reason, no retry
             await self.job_mgr.mark_failed(job_id, str(exc), retry_count=0)
@@ -205,6 +221,20 @@ class Dispatcher:
             )
             re_run_from = revision_context.get("re_run_from", "ANALYZING")
 
+        # ── Crash recovery: load this job's own saved outputs ────────
+        # If the process was killed mid-pipeline, some steps may already
+        # have outputs persisted in the DB. Load them so we can skip ahead.
+        own_outputs: dict = {}
+        for step in ("analysis", "scenes", "script", "prompts", "clips", "narrations"):
+            val = await self.job_mgr.load_step_output(job_id, step)
+            if val is not None:
+                own_outputs[step] = val
+        if own_outputs:
+            logger.info(
+                "Crash recovery: found saved outputs for steps: %s",
+                list(own_outputs.keys()),
+            )
+
         # Load parent job outputs to avoid re-running unchanged steps
         if job.get("parent_job_id"):
             parent_job = await self.job_mgr.get_job(job["parent_job_id"])
@@ -233,16 +263,31 @@ class Dispatcher:
                     params.setdefault("preference_context", pref_context)
 
         # ── Step 0: Collect photo paths ───────────────────────────────
+        MIN_PHOTOS = int(os.getenv("MIN_PHOTOS", "3"))
         photo_paths = sorted(
             str(p) for p in Path(photo_dir).iterdir()
             if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
         )
         if not photo_paths:
             raise ValueError("No photos found in directory")
+        if len(photo_paths) < MIN_PHOTOS:
+            await self.notifier.notify_progress(
+                job_id, "analyzing",
+                f"Only {len(photo_paths)} photo(s) found — we recommend at least {MIN_PHOTOS} "
+                "for a good video. Proceeding with what's available.",
+                job,
+            )
+            logger.warning(
+                "Low photo count: %d (min recommended: %d)", len(photo_paths), MIN_PHOTOS
+            )
 
         # ── Step 1: Analyze photos ────────────────────────────────────
-        # Skip if revision starts at SCRIPTING or PRODUCING (reuse parent's analysis)
-        if re_run_from == "ANALYZING" or "analysis" not in parent_outputs:
+        # Skip if: revision reuse OR crash recovery already has this output
+        if "analysis" in own_outputs:
+            analysis = own_outputs["analysis"]
+            sorted_photos = analyze_photos.sort_photos(analysis)
+            logger.info("Step 1 skipped (crash recovery: analysis already saved)")
+        elif re_run_from == "ANALYZING" or "analysis" not in parent_outputs:
             await self.notifier.notify_progress(
                 job_id, "analyzing",
                 f"Got {len(photo_paths)} photos, analyzing...", job
@@ -250,7 +295,10 @@ class Dispatcher:
             await self.job_mgr.update_status(job_id, "ANALYZING", "analyze_photos")
             logger.log_step_start("analyze_photos", {"count": len(photo_paths)})
 
-            analysis = await asyncio.to_thread(analyze_photos.run, photo_paths)
+            analysis = await asyncio.wait_for(
+                asyncio.to_thread(analyze_photos.run, photo_paths),
+                timeout=STEP_TIMEOUT_SECS,
+            )
             sorted_photos = analyze_photos.sort_photos(analysis)
 
             await self.job_mgr.save_step_output(job_id, "analysis", analysis)
@@ -300,8 +348,12 @@ class Dispatcher:
             logger.log_step_end("analyze_photos", {"skipped": True})
 
         # ── Step 2: plan_scenes ‖ generate_script (parallel) ─────────
-        # Skip if revision starts at PRODUCING (reuse parent's script + scenes)
-        if re_run_from in ("ANALYZING", "SCRIPTING") or "scenes" not in parent_outputs:
+        # Skip if: crash recovery OR revision reuse
+        if "scenes" in own_outputs and "script" in own_outputs:
+            scenes = own_outputs["scenes"]
+            script = own_outputs["script"]
+            logger.info("Step 2 skipped (crash recovery: scenes+script already saved)")
+        elif re_run_from in ("ANALYZING", "SCRIPTING") or "scenes" not in parent_outputs:
             await self.job_mgr.update_status(job_id, "SCRIPTING", "plan_and_script")
             logger.log_step_start("scripting", {"parallel": True})
 
@@ -315,22 +367,25 @@ class Dispatcher:
             if pref_ctx:
                 property_info += f"\n\n<agent_preferences>\n{pref_ctx}\n</agent_preferences>"
 
-            scenes, script = await asyncio.gather(
-                asyncio.to_thread(
-                    plan_scenes.run,
-                    photo_dir=photo_dir,
-                    property_info=property_info,
-                    language=params.get("language", "en"),
+            scenes, script = await asyncio.wait_for(
+                asyncio.gather(
+                    asyncio.to_thread(
+                        plan_scenes.run,
+                        photo_dir=photo_dir,
+                        property_info=property_info,
+                        language=params.get("language", "en"),
+                    ),
+                    asyncio.to_thread(
+                        generate_script.run,
+                        photo_analysis=analysis,
+                        address=params.get("address", "[TBD]"),
+                        price=params.get("price", "[TBD]"),
+                        agent_name=params.get("agent_name", ""),
+                        agent_phone=job["agent_phone"],
+                        preference_context=pref_ctx,
+                    ),
                 ),
-                asyncio.to_thread(
-                    generate_script.run,
-                    photo_analysis=analysis,
-                    address=params.get("address", "[TBD]"),
-                    price=params.get("price", "[TBD]"),
-                    agent_name=params.get("agent_name", ""),
-                    agent_phone=job["agent_phone"],
-                    preference_context=pref_ctx,
-                ),
+                timeout=STEP_TIMEOUT_SECS,
             )
 
             # Overlay the high-quality voiceover script onto scene narrations.
@@ -340,8 +395,9 @@ class Dispatcher:
             # the quality-controlled script segments.
             scenes = _distribute_script_to_scenes(scenes, script)
 
-            await self.job_mgr.save_step_output(job_id, "scenes", scenes)
-            await self.job_mgr.save_step_output(job_id, "script", script)
+            await self.job_mgr.save_step_outputs_batch(
+                job_id, {"scenes": scenes, "script": script}
+            )
             _persist_artifact(output_dir, "scenes", scenes)
             _persist_artifact(output_dir, "script", script)
             logger.log_step_end("scripting", {
@@ -383,16 +439,23 @@ class Dispatcher:
         else:
             scenes = parent_outputs["scenes"]
             script = parent_outputs["script"]
-            await self.job_mgr.save_step_output(job_id, "scenes", scenes)
-            await self.job_mgr.save_step_output(job_id, "script", script)
+            await self.job_mgr.save_step_outputs_batch(
+                job_id, {"scenes": scenes, "script": script}
+            )
             _persist_artifact(output_dir, "scenes", scenes)
             _persist_artifact(output_dir, "script", script)
             logger.log_step_start("scripting", {"reused_from_parent": True})
             logger.log_step_end("scripting", {"skipped": True})
 
         # ── Step 3: Video prompts (batch, with internal concurrency) ──
-        # Skip if revision starts at PRODUCING (reuse parent's prompts)
-        if re_run_from in ("ANALYZING", "SCRIPTING") or "prompts" not in parent_outputs:
+        # Skip if: crash recovery OR revision reuse
+        if "prompts" in own_outputs:
+            prompts = own_outputs["prompts"]
+            prompt_map = {p["sequence"]: p["motion_prompt"] for p in prompts}
+            for scene in scenes:
+                scene["motion_prompt"] = prompt_map.get(scene["sequence"], "")
+            logger.info("Step 3 skipped (crash recovery: prompts already saved)")
+        elif re_run_from in ("ANALYZING", "SCRIPTING") or "prompts" not in parent_outputs:
             await self.job_mgr.update_status(job_id, "PROMPTING", "write_prompts")
             await self.notifier.notify_progress(
                 job_id, "prompting",
@@ -401,17 +464,19 @@ class Dispatcher:
             )
             logger.log_step_start("write_prompts", {"scene_count": len(scenes)})
 
-            prompts = await asyncio.to_thread(
-                write_video_prompts.run_batch, scenes, photo_dir
+            prompts = await asyncio.wait_for(
+                write_video_prompts.run_batch_async(scenes, photo_dir),
+                timeout=STEP_TIMEOUT_SECS,
             )
 
             prompt_map = {p["sequence"]: p["motion_prompt"] for p in prompts}
             for scene in scenes:
                 scene["motion_prompt"] = prompt_map.get(scene["sequence"], "")
 
-            await self.job_mgr.save_step_output(job_id, "prompts", prompts)
             # Re-save scenes so motion_prompts survive restarts
-            await self.job_mgr.save_step_output(job_id, "scenes", scenes)
+            await self.job_mgr.save_step_outputs_batch(
+                job_id, {"prompts": prompts, "scenes": scenes}
+            )
             _persist_artifact(output_dir, "prompts", prompts)
             _persist_artifact(output_dir, "scenes", scenes)
             logger.log_step_end("write_prompts", {"count": len(prompts)})
@@ -445,30 +510,38 @@ class Dispatcher:
         )
         logger.log_step_start("producing", {"parallel": True, "re_run_from": re_run_from})
 
-        clips_dir = os.path.join(output_dir, "clips")
-        voice_dir = os.path.join(output_dir, "voice")
-        os.makedirs(clips_dir, exist_ok=True)
-        os.makedirs(voice_dir, exist_ok=True)
-
-        clips, narrations = await asyncio.gather(
-            asyncio.to_thread(
-                render_ai_video.generate_all_clips_v2,
-                scene_plan=scenes,
-                photo_dir=photo_dir,
-                output_dir=clips_dir,
-                aspect_ratio=params.get("aspect_ratio", "9:16"),
-            ),
-            asyncio.to_thread(
-                generate_voice.generate_scene_voiceovers,
-                scenes=scenes,
-                output_dir=voice_dir,
-                voice_id=voice_id,
-                style=params.get("style", "professional"),
-            ),
+        music_path = _find_music(
+            Path(__file__).parent.parent / "skills" / "listing-video" / "assets" / "music",
+            params.get("music", "modern"),
+            params.get("style", "professional"),
         )
 
-        await self.job_mgr.save_step_output(job_id, "clips", clips)
-        await self.job_mgr.save_step_output(job_id, "narrations", narrations)
+        clips_dir = os.path.join(output_dir, "clips")
+        voice_dir = os.path.join(output_dir, "voice")
+        listing_id = params.get("address", "listing")[:30].replace(" ", "_")
+
+        clips, narrations, result = await _render_and_assemble(
+            render_ai_video, generate_voice, assemble_final,
+            scenes=scenes, photo_dir=photo_dir,
+            clips_dir=clips_dir, voice_dir=voice_dir,
+            voice_id=voice_id, params=params,
+            music_path=str(music_path) if music_path else "",
+            output_dir=output_dir, listing_id=listing_id,
+            agent_phone=job.get("agent_phone", ""),
+        )
+
+        # Fine-grained progress: report render/TTS results before assembly status
+        ok_clips = sum(1 for c in clips if c.get("status") == "success")
+        ok_tts = sum(1 for n in narrations if n.get("status") == "success")
+        await self.notifier.notify_progress(
+            job_id, "producing",
+            f"Rendered {ok_clips}/{len(clips)} clips, {ok_tts}/{len(narrations)} voiceovers. Assembling...",
+            job,
+        )
+
+        await self.job_mgr.save_step_outputs_batch(
+            job_id, {"clips": clips, "narrations": narrations}
+        )
 
         # Aggregate IMA credits from render + TTS
         step4_credit = (
@@ -493,17 +566,12 @@ class Dispatcher:
             and n.get("audio_path")
             and os.path.exists(n.get("audio_path", ""))
         ]
-        _has_any_music = _find_music(
-            Path(__file__).parent.parent / "skills" / "listing-video" / "assets" / "music",
-            params.get("music", "modern"),
-            params.get("style", "professional"),
-        ) is not None
 
         _check_quality_gate("after_produce", [
             (len(successful_clips) == 0,
              f"All {len(clips)} video clips failed to render — no video possible",
              "critical"),
-            (len(successful_tts) == 0 and not _has_any_music,
+            (len(successful_tts) == 0 and music_path is None,
              f"All {len(narrations)} TTS failed and no BGM available — video will be silent",
              "critical"),
             (len(successful_tts) < len(narrations) / 2 and len(narrations) > 0,
@@ -511,34 +579,12 @@ class Dispatcher:
              "warning"),
         ], logger)
 
-        # ── Step 5: Assemble ──────────────────────────────────────────
+        # ── Step 5: Assemble (already done inside _render_and_assemble) ──
         await self.job_mgr.update_status(job_id, "ASSEMBLING", "assemble")
         await self.notifier.notify_progress(
             job_id, "assembling",
-            f"Assembling final video ({len(successful_clips)} clips + audio)...",
+            f"Assembled final video ({len(successful_clips)} clips + audio).",
             job,
-        )
-        logger.log_step_start("assemble")
-
-        music_path = _find_music(
-            Path(__file__).parent.parent / "skills" / "listing-video" / "assets" / "music",
-            params.get("music", "modern"),
-            params.get("style", "professional"),
-        )
-
-        result = await asyncio.to_thread(
-            assemble_final.full_assembly_v2,
-            scene_plan=scenes,
-            clips_dir=clips_dir,
-            narrations=narrations,
-            music_path=str(music_path) if music_path else "",
-            output_dir=output_dir,
-            listing_id=params.get("address", "listing")[:30].replace(" ", "_"),
-            aspect_ratio=params.get("aspect_ratio", "9:16"),
-            address=params.get("address"),
-            price=params.get("price"),
-            agent_name=params.get("agent_name"),
-            agent_phone=job.get("agent_phone"),
         )
 
         video_path = result.get("video_path", "")
@@ -560,7 +606,7 @@ class Dispatcher:
              "critical"),
             (not result.get("has_audio", True),
              "Final video has no audio stream",
-             "warning"),
+             "critical"),
             (result.get("overlay_requested") and not result.get("overlay_applied"),
              "Text overlay requested (address/price/agent) but failed to burn — video has no subtitles",
              "warning"),
@@ -608,24 +654,15 @@ class Dispatcher:
                 job,
             )
 
-            clips_dir_v2 = os.path.join(output_dir, "clips_v2")
-            voice_dir_v2 = os.path.join(output_dir, "voice_v2")
-
-            clips_v2, narrations_v2 = await asyncio.gather(
-                asyncio.to_thread(
-                    render_ai_video.generate_all_clips_v2,
-                    scene_plan=scenes,
-                    photo_dir=photo_dir,
-                    output_dir=clips_dir_v2,
-                    aspect_ratio=params.get("aspect_ratio", "9:16"),
-                ),
-                asyncio.to_thread(
-                    generate_voice.generate_scene_voiceovers,
-                    scenes=scenes,
-                    output_dir=voice_dir_v2,
-                    voice_id=voice_id,
-                    style=params.get("style", "professional"),
-                ),
+            clips_v2, narrations_v2, result_v2 = await _render_and_assemble(
+                render_ai_video, generate_voice, assemble_final,
+                scenes=scenes, photo_dir=photo_dir,
+                clips_dir=os.path.join(output_dir, "clips_v2"),
+                voice_dir=os.path.join(output_dir, "voice_v2"),
+                voice_id=voice_id, params=params,
+                music_path=str(music_path) if music_path else "",
+                output_dir=output_dir, listing_id=f"{listing_id}_v2",
+                agent_phone=job.get("agent_phone", ""),
             )
 
             # Track retry cost
@@ -636,21 +673,6 @@ class Dispatcher:
             if retry_credit > 0:
                 await self.job_mgr.add_cost(job_id, retry_credit)
                 logger.info("Retry cost: %.1f IMA credits", retry_credit)
-
-            result_v2 = await asyncio.to_thread(
-                assemble_final.full_assembly_v2,
-                scene_plan=scenes,
-                clips_dir=clips_dir_v2,
-                narrations=narrations_v2,
-                music_path=str(music_path) if music_path else "",
-                output_dir=output_dir,
-                listing_id=(params.get("address", "listing")[:30].replace(" ", "_") + "_v2"),
-                aspect_ratio=params.get("aspect_ratio", "9:16"),
-                address=params.get("address"),
-                price=params.get("price"),
-                agent_name=params.get("agent_name"),
-                agent_phone=job.get("agent_phone"),
-            )
 
             review_v2 = await _run_review(
                 reviewer, result_v2, narrations_v2, scenes, params,
@@ -825,6 +847,73 @@ def _distribute_script_to_scenes(scenes: list[dict], script: dict) -> list[dict]
     return scenes
 
 
+async def _render_and_assemble(
+    render_ai_video,
+    generate_voice,
+    assemble_final,
+    scenes: list[dict],
+    photo_dir: str,
+    clips_dir: str,
+    voice_dir: str,
+    voice_id: str | None,
+    params: dict,
+    music_path: str,
+    output_dir: str,
+    listing_id: str,
+    agent_phone: str,
+    progress_callback=None,
+) -> tuple[list[dict], list[dict], dict]:
+    """Render clips + voice in parallel, then assemble.
+
+    Shared by first attempt and auto-retry to eliminate duplication.
+    Returns (clips, narrations, assemble_result).
+    """
+    os.makedirs(clips_dir, exist_ok=True)
+    os.makedirs(voice_dir, exist_ok=True)
+
+    clips, narrations = await asyncio.wait_for(
+        asyncio.gather(
+            asyncio.to_thread(
+                render_ai_video.generate_all_clips_v2,
+                scene_plan=scenes,
+                photo_dir=photo_dir,
+                output_dir=clips_dir,
+                aspect_ratio=params.get("aspect_ratio", "9:16"),
+                progress_callback=progress_callback,
+            ),
+            asyncio.to_thread(
+                generate_voice.generate_scene_voiceovers,
+                scenes=scenes,
+                output_dir=voice_dir,
+                voice_id=voice_id,
+                style=params.get("style", "professional"),
+            ),
+        ),
+        timeout=RENDER_TIMEOUT_SECS,
+    )
+
+    result = await asyncio.wait_for(
+        asyncio.to_thread(
+            assemble_final.full_assembly_v2,
+            scene_plan=scenes,
+            clips_dir=clips_dir,
+            narrations=narrations,
+            music_path=music_path,
+            output_dir=output_dir,
+            listing_id=listing_id,
+            aspect_ratio=params.get("aspect_ratio", "9:16"),
+            address=params.get("address"),
+            price=params.get("price"),
+            agent_name=params.get("agent_name"),
+            agent_phone=agent_phone,
+            progress_callback=progress_callback,
+        ),
+        timeout=STEP_TIMEOUT_SECS,
+    )
+
+    return clips, narrations, result
+
+
 async def _run_review(
     reviewer,
     assemble_result: dict,
@@ -858,11 +947,14 @@ async def _run_review(
             "agent_name": params.get("agent_name", ""),
             "style": params.get("style", "professional"),
         }
-        result = await asyncio.to_thread(
-            reviewer.review_video,
-            video_path=video_path,
-            metadata=review_metadata,
-            output_dir=review_output_dir,
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                reviewer.review_video,
+                video_path=video_path,
+                metadata=review_metadata,
+                output_dir=review_output_dir,
+            ),
+            timeout=STEP_TIMEOUT_SECS,
         )
         # Copy review JSON to main output dir with label
         import shutil

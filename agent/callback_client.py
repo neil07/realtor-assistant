@@ -7,10 +7,12 @@ Failed callbacks are queued in SQLite for background retry (exponential backoff)
 Non-critical: failures never propagate to the pipeline.
 """
 
+import ipaddress
 import json
 import logging
 import os
 import time
+from urllib.parse import urlparse
 
 import aiosqlite
 import httpx
@@ -23,8 +25,36 @@ CALLBACK_TIMEOUT = 10  # seconds
 # Retry queue DB path — same directory as jobs.db
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "db", "jobs.db")
 
-# Exponential backoff: 30s, 60s, 120s, 240s, 480s
+# Exponential backoff: 30s, 60s, 120s, …
 RETRY_BACKOFF_BASE = 30
+# Default max retry attempts (configurable via env)
+DEFAULT_MAX_ATTEMPTS = int(os.getenv("CALLBACK_MAX_ATTEMPTS", "10"))
+
+
+def _is_safe_callback_url(url: str) -> bool:
+    """Reject callback URLs pointing to private/reserved IP ranges (SSRF protection)."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = parsed.hostname or ""
+        if not hostname:
+            return False
+        # Block obvious loopback/metadata hostnames
+        if hostname in ("localhost", "metadata.google.internal"):
+            return False
+        # Try to parse as IP address directly
+        try:
+            addr = ipaddress.ip_address(hostname)
+            return addr.is_global
+        except ValueError:
+            pass
+        # Hostname is a domain name — allow (DNS resolution happens at request time;
+        # full DNS-rebinding protection would require resolving here, but that adds
+        # latency and complexity; blocking raw IPs covers the most common SSRF vectors)
+        return True
+    except Exception:
+        return False
 
 
 class CallbackClient:
@@ -40,6 +70,10 @@ class CallbackClient:
         On failure, enqueues for background retry. Never raises.
         """
         if not url:
+            return False
+
+        if not _is_safe_callback_url(url):
+            logger.warning("Callback URL blocked by SSRF filter: %s", url)
             return False
 
         ok = await self._do_send(url, payload)
@@ -78,9 +112,10 @@ class CallbackClient:
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute(
                     """INSERT INTO callback_queue
-                       (url, payload, attempts, next_retry, created_at, last_error)
-                       VALUES (?, ?, 1, ?, ?, ?)""",
-                    (url, json.dumps(payload, ensure_ascii=False), next_retry, now, error),
+                       (url, payload, attempts, max_attempts, next_retry, created_at, last_error)
+                       VALUES (?, ?, 1, ?, ?, ?, ?)""",
+                    (url, json.dumps(payload, ensure_ascii=False),
+                     DEFAULT_MAX_ATTEMPTS, next_retry, now, error),
                 )
                 await db.commit()
             logger.info("Callback queued for retry: %s", url)
@@ -116,8 +151,15 @@ class CallbackClient:
                         attempts = row["attempts"] + 1
                         if attempts >= row["max_attempts"]:
                             logger.warning(
-                                "Callback to %s exhausted %d attempts — dropping",
+                                "Callback to %s exhausted %d attempts — moving to dead letter",
                                 row["url"], attempts,
+                            )
+                            await db.execute(
+                                """INSERT INTO dead_letter_callbacks
+                                   (url, payload, attempts, created_at, dead_at, last_error)
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (row["url"], row["payload"], attempts,
+                                 row["created_at"], now, "exhausted retries"),
                             )
                             await db.execute("DELETE FROM callback_queue WHERE id = ?", (row["id"],))
                         else:

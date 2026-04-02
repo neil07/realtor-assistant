@@ -1,0 +1,18 @@
+# HTTP Summary
+
+| kind           | scenario_id             | intent                   | action                 | awaiting        | note                                                   |
+| -------------- | ----------------------- | ------------------------ | ---------------------- | --------------- | ------------------------------------------------------ |
+| live_dialogue  | INIT-E1-A1-01           | listing_video            | start_video            | style_selection | Referral entry, direct photo send                      |
+| live_dialogue  | INIT-E1-A2-01           | app_question             | explain_use            | -               | Referral entry, user asks if this is an app            |
+| live_dialogue  | INIT-E1-A3-01           | trust_question           | reassure_trust         | -               | Referral entry, user asks about security               |
+| live_dialogue  | INIT-E4-A4-01           | daily_insight            | start_daily_insight    | -               | Natural traffic, new user asks for daily insight       |
+| live_dialogue  | INIT-E4-A1-01           | listing_video            | start_video            | style_selection | Natural traffic, new user sends photos with no context |
+| live_dialogue  | INIT-E4-A7-01           | pricing_question         | explain_pricing        | -               | Natural traffic, user asks price before trying         |
+| targeted_probe | PROBE-APP-01            | app_question             | explain_use            | -               | trust/setup confusion                                  |
+| targeted_probe | PROBE-PRICE-01          | pricing_question         | explain_pricing        | -               | pricing sensitivity                                    |
+| targeted_probe | PROBE-TRUST-01          | trust_question           | reassure_trust         | -               | security trust question                                |
+| targeted_probe | PROBE-FIRSTSTEP-01      | first_step_question      | recommend_starter_task | -               | needs starter task framing                             |
+| targeted_probe | PROBE-INSIGHTFIRST-01   | daily_insight            | start_daily_insight    | -               | insight-first natural phrasing                         |
+| targeted_probe | PROBE-INSIGHT-REFINE-01 | daily_insight_refinement | refine_daily_insight   | -               | post-insight refinement                                |
+| targeted_probe | PROBE-POST-DELIVERY-01  | revision                 | submit_feedback        | -               | style keyword after delivery                           |
+| targeted_probe | PROBE-POST-DELIVERY-02  | revision                 | submit_feedback        | -               | natural revision phrasing after delivery               |

@@ -37,7 +37,9 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-# Add scripts to path
+# Add scripts to path so skill modules can be imported by name (e.g. `import analyze_photos`).
+# This is the SINGLE authoritative insert; function-level inserts elsewhere are unnecessary.
+# Scripts also run standalone via `python script.py`, so a full package migration is deferred.
 SCRIPTS_DIR = Path(__file__).parent / "skills" / "listing-video" / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -104,6 +106,9 @@ async def lifespan(_app: FastAPI):
     # Start watchdog: alert if a job stalls for too long
     asyncio.create_task(_job_watchdog_loop(_job_mgr, notifier))
 
+    # Start disk cleanup loop (every 6h: FAILED 7d, DELIVERED 30d)
+    asyncio.create_task(_cleanup_loop())
+
     # Resume any jobs that were in-flight before a restart
     pending = await _job_mgr.list_pending_jobs()
     if pending:
@@ -118,21 +123,30 @@ async def lifespan(_app: FastAPI):
 
     print("Reel Agent server ready.")
     yield
-    # Graceful shutdown: running tasks will finish naturally
+    # Graceful shutdown: close persistent DB connection
+    if _job_mgr:
+        await _job_mgr.close()
 
 
 _retry_logger = logging.getLogger(__name__)
 
 
-_STALL_TIMEOUT = float(os.getenv("JOB_STALL_TIMEOUT", "600"))  # 10 min default
+# Escalating watchdog thresholds (seconds)
+_WARN_TIMEOUT = float(os.getenv("JOB_STALL_TIMEOUT", "600"))       # 10 min: first warning
+_CRITICAL_TIMEOUT = float(os.getenv("JOB_CRITICAL_TIMEOUT", "1200"))  # 20 min: urgent warning
+_CANCEL_TIMEOUT = float(os.getenv("JOB_CANCEL_TIMEOUT", "1800"))   # 30 min: auto-cancel
 
 
 async def _job_watchdog_loop(
     job_mgr: "JobManager",
     notifier: "ProgressNotifier",
 ) -> None:
-    """Background task: detect stalled jobs and warn the user every 60s."""
-    warned: set[str] = set()  # job_ids already warned (avoid spamming)
+    """Background task: escalating stall detection every 60s.
+
+    10min → warning, 20min → critical, 30min → auto-cancel.
+    """
+    # Track escalation level per job: 0=none, 1=warned, 2=critical
+    escalation: dict[str, int] = {}
 
     while True:
         try:
@@ -142,11 +156,42 @@ async def _job_watchdog_loop(
 
             for job in pending:
                 jid = job["job_id"]
-                updated = job.get("updated_at", now)
+                updated = job.get("step_started_at") or job.get("updated_at", now)
                 idle = now - updated
+                level = escalation.get(jid, 0)
 
-                if idle >= _STALL_TIMEOUT and jid not in warned:
-                    warned.add(jid)
+                if idle >= _CANCEL_TIMEOUT and level < 3:
+                    escalation[jid] = 3
+                    _retry_logger.warning(
+                        "Watchdog: auto-cancelling job %s after %.0fs at step '%s'",
+                        jid, idle, job.get("current_step"),
+                    )
+                    await job_mgr.mark_failed(
+                        jid,
+                        f"Auto-cancelled: stalled {int(idle/60)}+ min at '{job.get('current_step')}'",
+                    )
+                    await notifier.notify_failed(
+                        jid,
+                        f"Your video was automatically cancelled after {int(idle/60)} minutes "
+                        "without progress. Please try again.",
+                        job,
+                    )
+
+                elif idle >= _CRITICAL_TIMEOUT and level < 2:
+                    escalation[jid] = 2
+                    _retry_logger.warning(
+                        "Watchdog CRITICAL: job %s stalled %.0fs at step '%s'",
+                        jid, idle, job.get("current_step"),
+                    )
+                    await notifier.notify_stall_warning(
+                        jid,
+                        idle_seconds=idle,
+                        current_step=job.get("current_step", "unknown"),
+                        job=job,
+                    )
+
+                elif idle >= _WARN_TIMEOUT and level < 1:
+                    escalation[jid] = 1
                     _retry_logger.warning(
                         "Watchdog: job %s stalled %.0fs at step '%s'",
                         jid, idle, job.get("current_step"),
@@ -158,9 +203,9 @@ async def _job_watchdog_loop(
                         job=job,
                     )
 
-            # Clean up warned set: remove jobs that are no longer pending
+            # Clean up escalation map: remove jobs that are no longer pending
             pending_ids = {j["job_id"] for j in pending}
-            warned &= pending_ids
+            escalation = {k: v for k, v in escalation.items() if k in pending_ids}
 
         except asyncio.CancelledError:
             break
@@ -180,7 +225,32 @@ async def _callback_retry_loop(client: "CallbackClient") -> None:
             _retry_logger.warning("Callback retry loop error: %s", exc)
 
 
+async def _cleanup_loop() -> None:
+    """Background task: clean up old job output directories every 6 hours."""
+    from orchestrator.cleanup import cleanup_old_jobs
+
+    while True:
+        try:
+            await asyncio.sleep(6 * 3600)
+            await cleanup_old_jobs()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            _retry_logger.warning("Cleanup loop error: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (slowapi)
+# ---------------------------------------------------------------------------
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Reel Agent", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.mount("/output", StaticFiles(directory=str(OUTPUT_BASE)), name="output")
 
 # Operator Console
@@ -641,7 +711,9 @@ function showResult(data) {
 
 
 @app.post("/api/generate")
+@limiter.limit("5/minute")
 async def generate_video(
+    request: Request,
     photos: list[UploadFile] = File(...),
     address: str = Form("[TBD]"),
     price: str = Form("[TBD]"),
@@ -1309,7 +1381,9 @@ def _classify_intent(
 
 @app.post("/api/message")
 @app.post("/api/router-test")
+@limiter.limit("10/minute")
 async def handle_message(
+    request: Request,
     payload: MessagePayload,
     _auth: None = Depends(_require_backend_auth),
 ):
@@ -1499,8 +1573,7 @@ async def webhook_feedback(
     job_mgr = _get_job_mgr()
     dispatcher = _get_dispatcher()
 
-    # Import here to avoid circular deps at module load
-    sys.path.insert(0, str(SCRIPTS_DIR))
+    # Imports available via top-level sys.path.insert (line ~42)
     import feedback_classifier
     import profile_manager
 
@@ -1583,7 +1656,9 @@ async def get_profile(phone: str):
 
 
 @app.post("/webhook/in")
+@limiter.limit("10/minute")
 async def webhook_in(
+    request: Request,
     payload: WebhookPayload,
     _auth: None = Depends(_require_backend_auth),
 ):
@@ -1598,7 +1673,6 @@ async def webhook_in(
     action = payload.params.get("action")
 
     if action in ("disable_daily_push", "enable_daily_push"):
-        sys.path.insert(0, str(SCRIPTS_DIR))
         import profile_manager
 
         enabled = action == "enable_daily_push"
@@ -1608,6 +1682,13 @@ async def webhook_in(
             {"content_preferences": {"daily_push_enabled": enabled}},
         )
         return {"action": action, "daily_push_enabled": enabled}
+
+    # SSRF protection: validate callback URL before accepting
+    if payload.callback_url:
+        from agent.callback_client import _is_safe_callback_url
+
+        if not _is_safe_callback_url(payload.callback_url):
+            raise HTTPException(400, "callback_url points to a disallowed address")
 
     job_mgr = _get_job_mgr()
     dispatcher = _get_dispatcher()
@@ -1671,199 +1752,10 @@ async def manual_override(
     raise HTTPException(400, f"Unknown action: {action}")
 
 
-# ---------------------------------------------------------------------------
-# Admin — Skill Brief Management
-# ---------------------------------------------------------------------------
+# Admin Skill Brief routes (extracted to routes/admin.py)
+from routes.admin import router as admin_router
 
-_ADMIN_HTML = """<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Skill Brief 管理</title>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-          margin: 0; background: #f8f9fa; color: #212529; }}
-  .nav {{ background: #1a1a2e; color: #fff; padding: 14px 24px;
-          font-size: 15px; font-weight: 600; }}
-  .nav a {{ color: #7ec8e3; text-decoration: none; margin-left: 16px; font-weight: 400; }}
-  .container {{ max-width: 960px; margin: 32px auto; padding: 0 24px; }}
-  h2 {{ font-size: 20px; margin-bottom: 16px; }}
-  table {{ width: 100%; border-collapse: collapse; background: #fff;
-           box-shadow: 0 1px 4px rgba(0,0,0,.08); border-radius: 8px;
-           overflow: hidden; }}
-  th {{ background: #f1f3f5; font-size: 12px; text-transform: uppercase;
-        letter-spacing: .05em; padding: 10px 16px; text-align: left; }}
-  td {{ padding: 10px 16px; border-top: 1px solid #e9ecef; font-size: 14px; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px;
-            font-size: 11px; font-weight: 600; }}
-  .badge-custom {{ background: #d1fae5; color: #065f46; }}
-  .badge-default {{ background: #e5e7eb; color: #374151; }}
-  .btn {{ display: inline-block; padding: 5px 12px; border-radius: 6px;
-          font-size: 13px; text-decoration: none; background: #3b82f6;
-          color: #fff; }}
-  .btn:hover {{ background: #2563eb; }}
-  /* Editor page */
-  .editor-wrap {{ background: #fff; border-radius: 8px; padding: 24px;
-                  box-shadow: 0 1px 4px rgba(0,0,0,.08); }}
-  textarea {{ width: 100%; height: 520px; font-family: "SF Mono", Menlo, monospace;
-              font-size: 13px; line-height: 1.6; border: 1px solid #d1d5db;
-              border-radius: 6px; padding: 12px; box-sizing: border-box;
-              resize: vertical; }}
-  .actions {{ margin-top: 14px; display: flex; gap: 10px; align-items: center; }}
-  .btn-save {{ background: #10b981; padding: 8px 20px; font-size: 14px; }}
-  .btn-save:hover {{ background: #059669; }}
-  .btn-reset {{ background: #ef4444; padding: 8px 16px; font-size: 14px; }}
-  .btn-reset:hover {{ background: #dc2626; }}
-  .toast {{ display:none; padding: 8px 16px; border-radius: 6px; font-size: 13px;
-            background: #d1fae5; color: #065f46; }}
-</style>
-</head>
-<body>
-<div class="nav">🎬 Reel Agent Admin
-  <a href="/admin">经纪人列表</a>
-  <a href="/">测试界面</a>
-</div>
-{body}
-<script>
-async function saveSkill(phone, skillType) {{
-  const content = document.getElementById('editor').value;
-  const res = await fetch(`/admin/agents/${{phone}}/skills/${{skillType}}`, {{
-    method: 'PUT',
-    headers: {{'Content-Type': 'text/plain'}},
-    body: content,
-  }});
-  const toast = document.getElementById('toast');
-  if (res.ok) {{
-    toast.style.display = 'inline';
-    toast.textContent = '✅ 已保存';
-    setTimeout(() => toast.style.display = 'none', 2500);
-  }} else {{
-    toast.style.background = '#fee2e2'; toast.style.color = '#991b1b';
-    toast.style.display = 'inline';
-    toast.textContent = '❌ 保存失败';
-  }}
-}}
-async function resetSkill(phone, skillType) {{
-  if (!confirm('确定恢复为全局默认 Brief？当前内容会丢失。')) return;
-  const res = await fetch(`/admin/agents/${{phone}}/skills/${{skillType}}/reset`, {{method: 'POST'}});
-  if (res.ok) location.reload();
-}}
-</script>
-</body>
-</html>"""
-
-
-def _require_admin(request: Request) -> None:
-    """Simple token auth for admin routes. Skip check if ADMIN_TOKEN not set."""
-    token = os.environ.get("ADMIN_TOKEN", "")
-    if not token:
-        return  # No token configured — open access (dev mode)
-    auth = request.headers.get("Authorization", "")
-    if auth != f"Bearer {token}":
-        raise HTTPException(403, "Invalid or missing admin token")
-
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_list_agents(request: Request):
-    """Admin UI: list all agents and their Skill brief status."""
-    _require_admin(request)
-    import profile_manager
-
-    briefs = await asyncio.to_thread(profile_manager.list_skill_briefs)
-    # Also include agents that have profiles but no custom brief yet
-    all_profiles = []
-    profiles_dir = Path(__file__).parent / "skills" / "listing-video" / "profiles"
-    for p in sorted(profiles_dir.glob("*.json")):
-        try:
-            data = json.loads(p.read_text())
-            all_profiles.append(data.get("phone", p.stem))
-        except Exception:
-            pass
-
-    brief_index = {b["phone"]: b for b in briefs}
-    rows = ""
-    for phone in all_profiles:
-        safe = profile_manager._safe_phone(phone)
-        b = brief_index.get(safe, {})
-        is_custom = b.get("is_customized", False)
-        badge = (
-            '<span class="badge badge-custom">已定制</span>'
-            if is_custom
-            else '<span class="badge badge-default">使用默认</span>'
-        )
-        edit_url = f"/admin/agents/{phone}/skills/video/edit"
-        rows += f"<tr><td>{phone}</td><td>video</td><td>{badge}</td><td><a class='btn' href='{edit_url}'>编辑 Brief</a></td></tr>"
-
-    body = f"""
-    <div class="container">
-      <h2>经纪人 Skill Brief 管理</h2>
-      <table>
-        <thead><tr><th>手机号</th><th>Skill</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>"""
-    return _ADMIN_HTML.format(body=body)
-
-
-@app.get("/admin/agents/{phone}/skills/{skill_type}/edit", response_class=HTMLResponse)
-async def admin_edit_skill_ui(phone: str, skill_type: str, request: Request):
-    """Admin UI: edit a specific agent's Skill brief in the browser."""
-    _require_admin(request)
-    import profile_manager
-
-    content = await asyncio.to_thread(profile_manager.get_skill_brief, phone, skill_type)
-    escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    body = f"""
-    <div class="container">
-      <h2>编辑 Skill Brief — {phone} / {skill_type}</h2>
-      <div class="editor-wrap">
-        <textarea id="editor">{escaped}</textarea>
-        <div class="actions">
-          <button class="btn btn-save" onclick="saveSkill('{phone}','{skill_type}')">保存</button>
-          <button class="btn btn-reset" onclick="resetSkill('{phone}','{skill_type}')">恢复默认</button>
-          <span id="toast" class="toast"></span>
-        </div>
-      </div>
-    </div>"""
-    return _ADMIN_HTML.format(body=body)
-
-
-@app.get("/admin/agents/{phone}/skills/{skill_type}")
-async def admin_get_skill(phone: str, skill_type: str, request: Request):
-    """API: return the raw Markdown content of an agent's Skill brief."""
-    _require_admin(request)
-    import profile_manager
-
-    content = await asyncio.to_thread(profile_manager.get_skill_brief, phone, skill_type)
-    return {"phone": phone, "skill_type": skill_type, "content": content}
-
-
-@app.put("/admin/agents/{phone}/skills/{skill_type}", status_code=204)
-async def admin_update_skill(phone: str, skill_type: str, request: Request):
-    """API: overwrite an agent's Skill brief with plain-text Markdown body."""
-    _require_admin(request)
-    import profile_manager
-
-    content = (await request.body()).decode("utf-8")
-    if not content.strip():
-        raise HTTPException(400, "Brief content cannot be empty")
-    await asyncio.to_thread(profile_manager.update_skill_brief, phone, content, skill_type)
-
-
-@app.post("/admin/agents/{phone}/skills/{skill_type}/reset", status_code=204)
-async def admin_reset_skill(phone: str, skill_type: str, request: Request):
-    """API: reset an agent's Skill brief to the global default."""
-    _require_admin(request)
-    import profile_manager
-
-    default_path = (
-        Path(__file__).parent / "skills" / "listing-video" / "prompts" / "creative_director.md"
-    )
-    if not default_path.exists():
-        raise HTTPException(404, "Global default brief not found")
-    content = default_path.read_text()
-    await asyncio.to_thread(profile_manager.update_skill_brief, phone, content, skill_type)
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------

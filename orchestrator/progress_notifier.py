@@ -124,11 +124,14 @@ class ProgressNotifier:
         error: str,
         job: dict,
     ) -> None:
-        """Notify OpenClaw of a job failure with override link."""
+        """Notify OpenClaw of a job failure with user-friendly message."""
+        from orchestrator.error_classifier import classify_error
+
         url = job.get("callback_url") or self._build_url("/events")
         if not url:
             return
 
+        classified = classify_error(error)
         retry_count = job.get("retry_count", 0)
         override_url = self._build_url(f"/webhook/manual-override/{job_id}")
 
@@ -138,8 +141,10 @@ class ProgressNotifier:
             "openclaw_msg_id": job.get("openclaw_msg_id"),
             "agent_phone": job.get("agent_phone"),
             "error": error,
+            "user_message": classified["user_message"],
+            "suggested_action": classified["action"],
             "retry_count": retry_count,
-            "override_url": override_url,  # ops team can click to retry/cancel
+            "override_url": override_url,
         })
 
     async def notify_quality_blocked(

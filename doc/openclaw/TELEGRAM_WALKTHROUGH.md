@@ -6,12 +6,18 @@
 
 全部满足才允许通知人工去 Telegram：
 
-- [ ] G1 OpenClaw side routes every inbound user message through `POST /api/message`
+- [ ] G1 OpenClaw Router Skill owns inbound intent recognition and calls production APIs directly
+  - **Status:** Router Skill prompt ready (`doc/openclaw/ROUTER_SKILL_PROMPT.md`). Pending: deploy to mini runtime.
 - [ ] G2 OpenClaw side can call `/webhook/in` and `/webhook/feedback` with valid Bearer token
+  - **Status:** Backend APIs fully implemented and tested (49 tests passing). Pending: mini-side HTTP client setup.
 - [ ] G3 OpenClaw side owns a business callback target such as `"$OPENCLAW_CALLBACK_BASE_URL"/events`
+  - **Status:** Callback contract documented (`doc/openclaw/CALLBACK_RENDERING.md`). Pending: bridge route implementation on mini.
 - [ ] G4 `progress / delivered / failed / daily_insight` can be consumed and rendered in Telegram
+  - **Status:** Rendering rules documented (`doc/openclaw/CALLBACK_RENDERING.md`). Pending: mini-side render implementation.
 - [ ] G5 OpenClaw side stores and refreshes `last_job_id` for revision matching
-- [ ] G6 Reel Agent backend local or deployed endpoint is reachable and returns expected routing results
+  - **Status:** Session state management rules defined in Router Skill prompt. Pending: mini-side implementation.
+- [x] G6 Reel Agent backend local or deployed endpoint is reachable and production APIs respond as expected
+  - **Status:** All 4 production APIs implemented — `/webhook/in`, `/webhook/feedback`, `/api/profile/{phone}`, `/api/daily-trigger`. 49 tests green.
 
 Current implementation target:
 
@@ -52,7 +58,6 @@ User sends:
 Expected:
 
 - Bot acknowledges property-content lane
-- Backend route = `property_content / start_property_content`
 - Bot explicitly asks user to send photos or richer assets
 
 ### T3. Listing photos
@@ -63,7 +68,6 @@ User sends:
 
 Expected:
 
-- OpenClaw routes through `/api/message`
 - If style already exists → OpenClaw calls `/webhook/in` immediately
 - If style is missing → bot asks for style, then waits for `go / ok / yes`
 - Returned `job_id` is stored as `last_job_id`
@@ -146,3 +150,12 @@ Expected:
 ## 4. 当前建议
 
 在 `G1-G6` 全绿之前，保持项目侧继续施工和接线，不通知人工进 Telegram。
+
+**当前进度（2026-04-01）：**
+
+- G6 已绿（后端全部就绪）
+- G1-G5 的前置文档已全部产出，待 mini 侧部署：
+  - `doc/openclaw/ROUTER_SKILL_PROMPT.md` — 完整 Router Skill system prompt
+  - `doc/openclaw/CALLBACK_RENDERING.md` — Callback 渲染规范
+  - `doc/openclaw/OPS_CONTEXT_SPEC.md` — Session context 回流规范
+- 下一步：在 mini 机上部署 Router Skill prompt，实现 bridge route，跑通 T1-T8

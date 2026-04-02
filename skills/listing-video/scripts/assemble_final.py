@@ -11,12 +11,16 @@ import subprocess
 
 import cv2
 
+# Timeout for ffmpeg/ffprobe subprocess calls (seconds).
+# Prevents runaway processes from blocking the pipeline indefinitely.
+FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "300"))  # 5 min
+
 
 def _run_ffprobe_json(args: list[str]) -> dict | None:
     """Run ffprobe and return parsed JSON, or None when ffprobe is unavailable."""
     cmd = ["ffprobe", "-v", "quiet", *args]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     except FileNotFoundError:
         return None
     if result.returncode != 0:
@@ -69,7 +73,7 @@ def concat_clips(
             "-b:a", "192k",
             output_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
         if result.returncode != 0:
             return {"status": "error", "message": result.stderr[-500:]}
         return {"status": "success", "video_path": output_path}
@@ -98,7 +102,7 @@ def concat_clips(
                 "-pix_fmt", "yuv420p",
                 output_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
             if result.returncode != 0:
                 return {"status": "error", "message": result.stderr[-500:]}
@@ -169,7 +173,7 @@ def _concat_with_crossfade(
         try:
             cmd = ["ffprobe", "-v", "quiet", "-show_entries", "stream=r_frame_rate",
                    "-select_streams", "v:0", "-of", "csv=p=0", path]
-            r = subprocess.run(cmd, capture_output=True, text=True)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
             if r.returncode == 0:
                 return r.stdout.strip().split("\n")[0].strip()
         except FileNotFoundError:
@@ -254,7 +258,7 @@ def _concat_with_crossfade(
         output_path,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-500:]}
@@ -375,7 +379,7 @@ def add_audio_layers(
             output_path,
         ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
     if result.returncode != 0:
         return {"status": "error", "message": result.stderr[-500:]}
@@ -450,7 +454,7 @@ def create_output_format(
 
     if src_vertical == target_vertical:
         # Same orientation — just copy
-        subprocess.run(["cp", video_path, output_path], check=True)
+        subprocess.run(["cp", video_path, output_path], check=True, timeout=60)
     elif target_vertical:
         # 16:9 source → 9:16 target: blurred background fill
         cmd = [
@@ -464,7 +468,7 @@ def create_output_format(
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "copy", output_path,
         ]
-        subprocess.run(cmd, capture_output=True, text=True)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     else:
         # 9:16 source → 16:9 target: blurred background fill
         cmd = [
@@ -478,7 +482,7 @@ def create_output_format(
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-c:a", "copy", output_path,
         ]
-        subprocess.run(cmd, capture_output=True, text=True)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
     return {
         "status": "success",
@@ -512,7 +516,7 @@ def check_has_audio(file_path: str) -> bool:
         streams = data.get("streams", [])
         return any(s.get("codec_type") == "audio" for s in streams)
     cmd = ["ffmpeg", "-i", file_path, "-f", "null", "-"]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
     stderr = (result.stderr or "").lower()
     return "audio:" in stderr or ("stream #0:" in stderr and "audio" in stderr)
 
@@ -576,7 +580,7 @@ def _burn_subtitle_on_clip(
             "-c:a", "copy",
             output_path,
         ]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
         return r.returncode == 0
     finally:
         if os.path.exists(sub_png):
@@ -684,7 +688,7 @@ def add_text_overlays(
     has_narrations = bool(narration_items)
 
     if not has_title and not has_cta and not has_narrations:
-        subprocess.run(["cp", video_path, output_path], check=True)
+        subprocess.run(["cp", video_path, output_path], check=True, timeout=60)
         return {"status": "success", "video_path": output_path}
 
     # Probe video dimensions
@@ -743,7 +747,7 @@ def add_text_overlays(
             overlay_inputs.append((cta_png, f"between(t,{cta_start:.1f},{duration:.1f})"))
 
     if not overlay_inputs:
-        subprocess.run(["cp", video_path, output_path], check=True)
+        subprocess.run(["cp", video_path, output_path], check=True, timeout=60)
         return {"status": "success", "video_path": output_path}
 
     # Build ffmpeg command: video + PNG inputs → overlay filter chain
@@ -770,7 +774,7 @@ def add_text_overlays(
         output_path,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
     # Cleanup temp PNGs
     import shutil
@@ -860,7 +864,7 @@ def _ensure_video_covers_audio(
             stretched_path,
         ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
     if result.returncode != 0:
         # Fallback: return original and let audio be truncated
@@ -1126,7 +1130,7 @@ def full_assembly_v2(
                         stretched_path,
                     ]
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
                 if result.returncode == 0:
                     clip_path = stretched_path
                 else:
@@ -1146,7 +1150,7 @@ def full_assembly_v2(
                     "-crf", "18", "-pix_fmt", "yuv420p",
                     "-an", trimmed_path,
                 ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
                 if result.returncode == 0:
                     clip_path = trimmed_path
                 else:
@@ -1162,7 +1166,7 @@ def full_assembly_v2(
                 "-shortest",
                 merged_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
 
             if result.returncode == 0:
                 merged_dur = get_duration(merged_path)
@@ -1313,8 +1317,36 @@ def full_assembly_v2(
             len(narr_lookup), len(narrations), music_path,
         )
 
+    # Step 7: Video integrity validation via ffprobe
+    integrity_ok = True
+    integrity_warning = None
+    probe = _run_ffprobe_json([
+        "-show_format", "-show_streams", "-of", "json", final_video,
+    ])
+    if probe:
+        fmt = probe.get("format", {})
+        streams = probe.get("streams", [])
+        video_streams = [s for s in streams if s.get("codec_type") == "video"]
+        probe_duration = float(fmt.get("duration", 0))
+
+        if not video_streams:
+            integrity_ok = False
+            integrity_warning = "ffprobe: no video stream found in final output"
+        elif probe_duration < 1.0:
+            integrity_ok = False
+            integrity_warning = f"ffprobe: final video too short ({probe_duration:.1f}s)"
+        elif abs(probe_duration - total_dur) > total_dur * 0.3 and total_dur > 0:
+            integrity_warning = (
+                f"ffprobe: duration mismatch (expected ~{total_dur:.1f}s, got {probe_duration:.1f}s)"
+            )
+
+        if integrity_warning:
+            logger.warning("VIDEO INTEGRITY: %s", integrity_warning)
+    else:
+        logger.info("ffprobe not available — skipping integrity validation")
+
     result = {
-        "status": "success",
+        "status": "success" if integrity_ok else "error",
         "video_path": final_video,
         "aspect_ratio": target_ratio,
         "total_duration": total_dur,
@@ -1322,6 +1354,7 @@ def full_assembly_v2(
         "has_audio": has_audio,
         "narrations_succeeded": len(narr_lookup),
         "audio_warning": None if has_audio else "No audio stream in final video — check TTS and music pipeline",
+        "integrity_warning": integrity_warning,
         "overlay_requested": has_any_overlay,
         "overlay_applied": overlay_applied,
     }
@@ -1335,4 +1368,4 @@ def full_assembly_v2(
 if __name__ == "__main__":
     print("Use full_assembly() or full_assembly_v2() from the orchestrator.")
     print("Standalone: ffmpeg must be installed.")
-    subprocess.run(["ffmpeg", "-version"], capture_output=True)
+    subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=10)

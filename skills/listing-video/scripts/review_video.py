@@ -145,11 +145,13 @@ def review_video(
         motion_interpretation = interpret_motion(motion_metrics)
         motion_metrics["interpretation"] = motion_interpretation
         _log.info(
-            "Motion metrics: dynamic=%.3f (%s), smooth=%.3f (%s)",
+            "Motion metrics: dynamic=%.3f (%s), smooth=%.3f (%s), flicker=%.3f (%s)",
             motion_metrics.get("dynamic_degree", 0),
             motion_interpretation.get("dynamic_label", "?"),
             motion_metrics.get("motion_smoothness", 0),
             motion_interpretation.get("smoothness_label", "?"),
+            motion_metrics.get("temporal_flickering", 0),
+            motion_interpretation.get("flickering_label", "?"),
         )
     except Exception as exc:
         _log.warning("Motion metrics failed (non-blocking): %s", exc)
@@ -171,6 +173,21 @@ def review_video(
         f"- Style: {metadata.get('style', 'professional')}\n"
         f"- Sample narrations: {narration_str}\n"
     )
+
+    # G1: Feed motion context into Claude prompt so it can factor in quantitative data
+    if motion_metrics:
+        interp = motion_metrics.get("interpretation", {})
+        meta_block += (
+            f"- Motion analysis: dynamic={motion_metrics.get('dynamic_degree', 0):.2f} "
+            f"({interp.get('dynamic_label', '?')}), "
+            f"smooth={motion_metrics.get('motion_smoothness', 0):.2f} "
+            f"({interp.get('smoothness_label', '?')}), "
+            f"flicker={motion_metrics.get('temporal_flickering', 0):.2f} "
+            f"({interp.get('flickering_label', '?')})\n"
+        )
+        motion_issue_list = interp.get("issues", [])
+        if motion_issue_list:
+            meta_block += f"- Motion issues: {'; '.join(motion_issue_list)}\n"
 
     # Build Claude message content
     content = []
@@ -207,9 +224,24 @@ def review_video(
         if issue not in top_issues:
             top_issues.append(issue)
 
+    # G2: Motion issues adjust overall_score — quantitative metrics must affect scoring.
+    # Severe issues (slideshow, jerky, severe flickering) → -1.0 each; mild → -0.5
+    _SEVERE_KEYWORDS = {"slideshow", "severe", "jerky"}
+    motion_penalty = sum(
+        1.0 if any(kw in issue.lower() for kw in _SEVERE_KEYWORDS) else 0.5
+        for issue in motion_issues
+    )
+    claude_score = scores.get("overall_score", 0)
+    adjusted_score = round(max(0, claude_score - motion_penalty), 1)
+    if motion_penalty > 0:
+        _log.info(
+            "Motion penalty: -%.1f (claude=%.1f → adjusted=%.1f)",
+            motion_penalty, claude_score, adjusted_score,
+        )
+
     review_result = {
         "status": "success",
-        "overall_score": scores.get("overall_score", 0),
+        "overall_score": adjusted_score,
         "deliverable": scores.get("deliverable", True),
         "scores": scores,
         "motion_metrics": motion_metrics,
@@ -291,9 +323,11 @@ def format_score_summary(review: dict) -> str:
     if motion:
         dd = motion.get("dynamic_degree", 0)
         ms = motion.get("motion_smoothness", 0)
+        tf = motion.get("temporal_flickering", 0)
         lines.append(
             f"🎥 Motion: dynamic {dd:.0%} ({motion_interp.get('dynamic_label', '?')}) | "
-            f"smooth {ms:.0%} ({motion_interp.get('smoothness_label', '?')})"
+            f"smooth {ms:.0%} ({motion_interp.get('smoothness_label', '?')}) | "
+            f"flicker {tf:.0%} ({motion_interp.get('flickering_label', '?')})"
         )
 
     if issues:

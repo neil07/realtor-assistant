@@ -41,22 +41,23 @@
 
 ## 体验压测（上线前必读）
 
-| 文件                                                          | 内容                                       | 状态 |
-| ------------------------------------------------------------- | ------------------------------------------ | ---- |
-| `doc/prelaunch-experience/README.md`                          | 预上线体验压测总入口                       | 现行 |
-| `doc/prelaunch-experience/master-journeys.md`                 | 初始化、视频、资讯、长期使用、后台五条主线 | 现行 |
-| `doc/prelaunch-experience/initialization-playbook.md`         | 入口分流、访谈转任务、首用路径专项打法     | 现行 |
-| `doc/prelaunch-experience/friction-taxonomy.md`               | 缺陷码、严重级别、口碑传播阻断点           | 现行 |
-| `doc/prelaunch-experience/report-template.md`                 | 体验报告模板                               | 现行 |
-| `doc/prelaunch-experience/report-2026-04-01.md`               | 2026-04-01 预上线体检正式报告              | 现行 |
-| `doc/prelaunch-experience/business-walkthrough-2026-04-01.md` | 2026-04-01 产品视角业务链路走查报告        | 现行 |
-| `doc/prelaunch-experience/fix-playbook-2026-04-01.md`         | 2026-04-01 体验问题修复指引                | 现行 |
-| `doc/prelaunch-experience/scenario-catalog.json`              | 结构化场景目录                             | 现行 |
-| `doc/prelaunch-experience/mock-output-packs.json`             | 模拟输出结果包                             | 现行 |
-| `doc/prelaunch-experience/scoring-template.csv`               | 统一评分模板                               | 现行 |
-| `doc/prelaunch-experience/scoring-2026-04-01.csv`             | 2026-04-01 场景评分结果                    | 现行 |
-| `tools/run_dialogue_eval.py`                                  | test-only `/api/message` 批量压测脚本      | 现行 |
-| `tools/run_prelaunch_audit.py`                                | 预上线体检执行脚本                         | 现行 |
+| 文件                                                           | 内容                                       | 状态 |
+| -------------------------------------------------------------- | ------------------------------------------ | ---- |
+| `doc/prelaunch-experience/README.md`                           | 预上线体验压测总入口                       | 现行 |
+| `doc/prelaunch-experience/master-journeys.md`                  | 初始化、视频、资讯、长期使用、后台五条主线 | 现行 |
+| `doc/prelaunch-experience/initialization-playbook.md`          | 入口分流、访谈转任务、首用路径专项打法     | 现行 |
+| `doc/prelaunch-experience/friction-taxonomy.md`                | 缺陷码、严重级别、口碑传播阻断点           | 现行 |
+| `doc/prelaunch-experience/report-template.md`                  | 体验报告模板                               | 现行 |
+| `doc/prelaunch-experience/report-2026-04-01.md`                | 2026-04-01 预上线体检正式报告              | 现行 |
+| `doc/prelaunch-experience/business-walkthrough-2026-04-01.md`  | 2026-04-01 产品视角业务链路走查报告        | 现行 |
+| `doc/prelaunch-experience/fix-playbook-2026-04-01.md`          | 2026-04-01 体验问题修复指引                | 现行 |
+| `doc/prelaunch-experience/development-checklist-2026-04-01.md` | 2026-04-01 开发交接与待办总清单            | 现行 |
+| `doc/prelaunch-experience/scenario-catalog.json`               | 结构化场景目录                             | 现行 |
+| `doc/prelaunch-experience/mock-output-packs.json`              | 模拟输出结果包                             | 现行 |
+| `doc/prelaunch-experience/scoring-template.csv`                | 统一评分模板                               | 现行 |
+| `doc/prelaunch-experience/scoring-2026-04-01.csv`              | 2026-04-01 场景评分结果                    | 现行 |
+| `tools/run_dialogue_eval.py`                                   | test-only `/api/message` 批量压测脚本      | 现行 |
+| `tools/run_prelaunch_audit.py`                                 | 预上线体检执行脚本                         | 现行 |
 
 ---
 

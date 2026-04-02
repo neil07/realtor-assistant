@@ -8,19 +8,51 @@ Fallback: OpenAI TTS → IMA Studio TTS.
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
 
 ELEVENLABS_API = "https://api.elevenlabs.io/v1"
 
-# Default voices for different styles (ElevenLabs fallback)
+# Default voices for different styles (ElevenLabs)
+# Override via env: ELEVENLABS_VOICE_ID (applies to all styles)
 DEFAULT_VOICES = {
-    "male_energetic": "pNInz6obpgDQGcFmaJgB",     # Adam
-    "male_professional": "ErXwobaYiN019PkySvjV",    # Antoni
-    "female_energetic": "EXAVITQu4vr4xnSDxMaL",    # Bella
-    "female_professional": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+    "male_energetic": os.environ.get("ELEVENLABS_VOICE_ENERGETIC", "pNInz6obpgDQGcFmaJgB"),
+    "male_professional": os.environ.get("ELEVENLABS_VOICE_PROFESSIONAL", "ErXwobaYiN019PkySvjV"),
+    "female_energetic": os.environ.get("ELEVENLABS_VOICE_F_ENERGETIC", "EXAVITQu4vr4xnSDxMaL"),
+    "female_professional": os.environ.get("ELEVENLABS_VOICE_F_PROFESSIONAL", "21m00Tcm4TlvDq8ikWAM"),
 }
+# Single override: if set, always use this voice regardless of style
+_VOICE_OVERRIDE = os.environ.get("ELEVENLABS_VOICE_ID", "")
+
+# Max parallel TTS calls
+TTS_MAX_WORKERS = int(os.environ.get("TTS_MAX_WORKERS", "4"))
+
+# Circuit breaker: skip an engine after this many consecutive failures
+_CB_THRESHOLD = 2
+
+
+class _EngineCircuitBreaker:
+    """Thread-safe circuit breaker for TTS engine fallback chain."""
+
+    def __init__(self, threshold: int = _CB_THRESHOLD):
+        self._threshold = threshold
+        self._failures: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def is_open(self, engine: str) -> bool:
+        with self._lock:
+            return self._failures.get(engine, 0) >= self._threshold
+
+    def record_success(self, engine: str) -> None:
+        with self._lock:
+            self._failures[engine] = 0
+
+    def record_failure(self, engine: str) -> None:
+        with self._lock:
+            self._failures[engine] = self._failures.get(engine, 0) + 1
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +103,7 @@ def generate_elevenlabs(
         return {"status": "error", "message": "ELEVENLABS_API_KEY not set"}
 
     if not voice_id:
-        voice_id = DEFAULT_VOICES.get(f"male_{style}", DEFAULT_VOICES["male_professional"])
+        voice_id = _VOICE_OVERRIDE or DEFAULT_VOICES.get(f"male_{style}", DEFAULT_VOICES["male_professional"])
 
     headers = {
         "xi-api-key": api_key,
@@ -210,15 +242,18 @@ def generate_voiceover(
     output_path: str,
     voice_id: str = None,
     style: str = "professional",
+    circuit_breaker: _EngineCircuitBreaker | None = None,
 ) -> dict:
     """
     Main entry point: generate voiceover with fallback chain.
 
-    IMA Studio (primary) → ElevenLabs → OpenAI TTS.
+    ElevenLabs (primary) → OpenAI TTS → IMA Studio.
+    If a circuit_breaker is provided, engines with repeated failures are skipped.
     """
     import video_diagnostics
     from job_logger import get_logger, log_step_end, log_step_start
 
+    cb = circuit_breaker
     logger = get_logger()
     attempts = []
     log_step_start("tts_voiceover", {
@@ -228,35 +263,45 @@ def generate_voiceover(
         "engine": "elevenlabs",
     })
 
-    # Primary: ElevenLabs — stateless single HTTP call, fastest and most reliable
-    result = generate_elevenlabs(text, output_path, voice_id=voice_id, style=style)
-    attempts.append(video_diagnostics.build_attempt_record(
-        engine="elevenlabs",
-        status=result.get("status", "error"),
-        result=result,
-        characters=len(text),
-    ))
-    if result["status"] == "success":
-        result["engine"] = "elevenlabs"
-        result["attempts"] = attempts
-        log_step_end("tts_voiceover", result)
-        return result
-    logger.warning("ElevenLabs failed: %s, trying OpenAI TTS...", result["message"])
+    # Primary: ElevenLabs �� stateless single HTTP call, fastest and most reliable
+    if not (cb and cb.is_open("elevenlabs")):
+        result = generate_elevenlabs(text, output_path, voice_id=voice_id, style=style)
+        attempts.append(video_diagnostics.build_attempt_record(
+            engine="elevenlabs",
+            status=result.get("status", "error"),
+            result=result,
+            characters=len(text),
+        ))
+        if result["status"] == "success":
+            if cb:
+                cb.record_success("elevenlabs")
+            result["engine"] = "elevenlabs"
+            result["attempts"] = attempts
+            log_step_end("tts_voiceover", result)
+            return result
+        if cb:
+            cb.record_failure("elevenlabs")
+        logger.warning("ElevenLabs failed: %s, trying OpenAI TTS...", result["message"])
 
     # Fallback 1: OpenAI TTS — stateless single HTTP call
-    result = generate_openai_tts(text, output_path)
-    attempts.append(video_diagnostics.build_attempt_record(
-        engine="openai_tts",
-        status=result.get("status", "error"),
-        result=result,
-        characters=len(text),
-    ))
-    if result["status"] == "success":
-        result["engine"] = "openai_tts"
-        result["attempts"] = attempts
-        log_step_end("tts_voiceover", result)
-        return result
-    logger.warning("OpenAI TTS failed: %s, trying IMA TTS...", result["message"])
+    if not (cb and cb.is_open("openai_tts")):
+        result = generate_openai_tts(text, output_path)
+        attempts.append(video_diagnostics.build_attempt_record(
+            engine="openai_tts",
+            status=result.get("status", "error"),
+            result=result,
+            characters=len(text),
+        ))
+        if result["status"] == "success":
+            if cb:
+                cb.record_success("openai_tts")
+            result["engine"] = "openai_tts"
+            result["attempts"] = attempts
+            log_step_end("tts_voiceover", result)
+            return result
+        if cb:
+            cb.record_failure("openai_tts")
+        logger.warning("OpenAI TTS failed: %s, trying IMA TTS...", result["message"])
 
     # Fallback 2: IMA TTS — task queue, slower, but covers the case where
     # both ElevenLabs and OpenAI keys are absent
@@ -267,6 +312,11 @@ def generate_voiceover(
         result=result,
         characters=len(text),
     ))
+    if cb:
+        if result["status"] == "success":
+            cb.record_success("ima")
+        else:
+            cb.record_failure("ima")
     result["engine"] = "ima" if result["status"] == "success" else None
     result["attempts"] = attempts
     log_step_end("tts_voiceover", result)
@@ -277,6 +327,75 @@ def generate_voiceover(
 # Per-scene voiceover generation
 # ---------------------------------------------------------------------------
 
+def _get_audio_duration(audio_path: str) -> float:
+    """Get audio duration via mutagen (fast) or ffprobe (fallback)."""
+    try:
+        from mutagen.mp3 import MP3
+
+        return float(getattr(MP3(audio_path).info, "length", 0.0) or 0.0)
+    except Exception:
+        pass
+    import subprocess
+
+    try:
+        dur_result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "json", audio_path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if dur_result.returncode == 0:
+            dur_data = json.loads(dur_result.stdout)
+            return float(dur_data.get("format", {}).get("duration", 0))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return 0.0
+
+
+def _tts_one_scene(
+    scene: dict,
+    output_dir: str,
+    voice_id: str | None,
+    style: str,
+    circuit_breaker: _EngineCircuitBreaker,
+) -> dict:
+    """Generate TTS for a single scene. Called inside ThreadPoolExecutor."""
+    seq = scene["sequence"]
+    text = scene["text_narration"].strip()
+    audio_path = os.path.join(output_dir, f"narration_{seq:02d}.mp3")
+
+    result = generate_voiceover(
+        text=text,
+        output_path=audio_path,
+        voice_id=voice_id,
+        style=style,
+        circuit_breaker=circuit_breaker,
+    )
+
+    if result["status"] == "success":
+        duration = _get_audio_duration(audio_path)
+        return {
+            "sequence": seq,
+            "audio_path": audio_path,
+            "duration": duration,
+            "text": text,
+            "status": "success",
+            "engine": result.get("engine"),
+            "model": result.get("model"),
+            "credit": result.get("credit", 0),
+            "attempts": result.get("attempts", []),
+        }
+    else:
+        return {
+            "sequence": seq,
+            "audio_path": None,
+            "duration": 0,
+            "text": text,
+            "status": "error",
+            "message": result.get("message", ""),
+            "attempts": result.get("attempts", []),
+        }
+
+
 def generate_scene_voiceovers(
     scenes: list[dict],
     output_dir: str,
@@ -286,8 +405,8 @@ def generate_scene_voiceovers(
     """
     Generate individual TTS audio for each scene's narration.
 
-    This enables precise audio-visual sync: each clip gets its own
-    narration segment, and clip duration can be matched to audio length.
+    Runs up to TTS_MAX_WORKERS scenes in parallel with a shared circuit breaker
+    that skips engines after consecutive failures.
     """
     import video_diagnostics
     from job_logger import get_logger, log_step_end, log_step_start
@@ -297,91 +416,56 @@ def generate_scene_voiceovers(
     job_dir = str(Path(output_dir).parent)
     video_diagnostics.record_scene_plan(job_dir, scenes)
 
-    results = []
     narrated = [s for s in scenes if s.get("text_narration", "").strip()]
 
     log_step_start("per_scene_tts", {
         "total_scenes": len(narrated),
         "voice_id": voice_id or "default",
         "style": style,
+        "max_workers": TTS_MAX_WORKERS,
     })
 
-    for scene in narrated:
-        seq = scene["sequence"]
-        text = scene["text_narration"].strip()
-        audio_path = os.path.join(output_dir, f"narration_{seq:02d}.mp3")
+    cb = _EngineCircuitBreaker()
+    results: list[dict] = []
+    workers = min(len(narrated), TTS_MAX_WORKERS)
 
-        logger.info("  TTS scene %02d: %d chars  %.40s...", seq, len(text), text)
-
-        result = generate_voiceover(
-            text=text,
-            output_path=audio_path,
-            voice_id=voice_id,
-            style=style,
-        )
-
-        if result["status"] == "success":
-            # Get actual audio duration
-            duration = 0.0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                _tts_one_scene, scene, output_dir, voice_id, style, cb,
+            ): scene["sequence"]
+            for scene in narrated
+        }
+        for future in as_completed(futures):
+            seq = futures[future]
             try:
-                from mutagen.mp3 import MP3
+                r = future.result()
+            except Exception as exc:
+                logger.warning("TTS scene %02d exception: %s", seq, exc)
+                r = {
+                    "sequence": seq, "audio_path": None, "duration": 0,
+                    "text": "", "status": "error", "message": str(exc),
+                    "attempts": [],
+                }
+            results.append(r)
 
-                duration = float(getattr(MP3(audio_path).info, "length", 0.0) or 0.0)
-            except Exception:
-                import subprocess
-                dur_cmd = [
-                    "ffprobe", "-v", "quiet",
-                    "-show_entries", "format=duration",
-                    "-of", "json", audio_path,
-                ]
-                try:
-                    dur_result = subprocess.run(dur_cmd, capture_output=True, text=True)
-                    if dur_result.returncode == 0:
-                        dur_data = json.loads(dur_result.stdout)
-                        duration = float(dur_data.get("format", {}).get("duration", 0))
-                except FileNotFoundError:
-                    duration = 0.0
+            if r["status"] == "success":
+                logger.info("  TTS scene %02d: %.1fs  %s", seq, r["duration"], r.get("engine"))
+                video_diagnostics.record_tts_diagnostics(
+                    job_dir=job_dir, sequence=seq, text=r["text"],
+                    attempts=r.get("attempts", []),
+                    final_result={**r, "audio_path": r["audio_path"]},
+                )
+            else:
+                logger.warning("  TTS scene %02d FAILED: %s", seq, r.get("message", ""))
+                video_diagnostics.record_tts_diagnostics(
+                    job_dir=job_dir, sequence=seq, text=r.get("text", ""),
+                    attempts=r.get("attempts", []),
+                    final_result=r,
+                )
 
-            results.append({
-                "sequence": seq,
-                "audio_path": audio_path,
-                "duration": duration,
-                "text": text,
-                "status": "success",
-                "engine": result.get("engine"),
-                "model": result.get("model"),
-                "credit": result.get("credit", 0),
-                "attempts": result.get("attempts", []),
-            })
-            logger.info("    -> %.1fs  %s", duration, audio_path)
-            video_diagnostics.record_tts_diagnostics(
-                job_dir=job_dir,
-                sequence=seq,
-                text=text,
-                attempts=result.get("attempts", []),
-                final_result={
-                    **result,
-                    "audio_path": audio_path,
-                },
-            )
-        else:
-            results.append({
-                "sequence": seq,
-                "audio_path": None,
-                "duration": 0,
-                "text": text,
-                "status": "error",
-                "message": result.get("message", ""),
-                "attempts": result.get("attempts", []),
-            })
-            logger.warning("    -> FAILED: %s", result.get("message", ""))
-            video_diagnostics.record_tts_diagnostics(
-                job_dir=job_dir,
-                sequence=seq,
-                text=text,
-                attempts=result.get("attempts", []),
-                final_result=result,
-            )
+    # Sort by sequence for deterministic output
+    results.sort(key=lambda x: x["sequence"])
 
     log_step_end("per_scene_tts", {
         "status": "success",

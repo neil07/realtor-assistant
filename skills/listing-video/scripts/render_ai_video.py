@@ -14,6 +14,39 @@ from pathlib import Path
 _KEN_BURNS_MOTIONS = ["slow_push", "pull_back", "slide_left", "slide_right"]
 
 # ---------------------------------------------------------------------------
+# Per-clip quality gate — motion-based, no API cost
+# Thresholds derived from motion_metrics.interpret_motion() bands
+# ---------------------------------------------------------------------------
+
+_CLIP_MIN_DYNAMIC = 0.10       # Below → "PPT feel", trigger re-render
+_CLIP_MIN_SMOOTHNESS = 0.35    # Below → "jerky/distorted", trigger re-render
+_CLIP_MAX_FLICKERING = 0.15    # Above → "flickering", trigger re-render
+_CLIP_HOPELESS_DYNAMIC = 0.05  # Below → give up on AI, use Ken Burns
+
+
+def _assess_clip_quality(clip_path: str) -> dict:
+    """Run motion metrics on a single rendered clip. Returns metrics dict."""
+    from motion_metrics import compute_motion_metrics
+    try:
+        return compute_motion_metrics(clip_path)
+    except Exception:
+        return {"dynamic_degree": 0.0, "motion_smoothness": 1.0, "temporal_flickering": 0.0, "frame_count": 0}
+
+
+def _clip_needs_rerender(metrics: dict) -> bool:
+    """Check if a clip's motion metrics fall below quality thresholds (3-dim)."""
+    return (
+        metrics.get("dynamic_degree", 0) < _CLIP_MIN_DYNAMIC
+        or metrics.get("motion_smoothness", 1) < _CLIP_MIN_SMOOTHNESS
+        or metrics.get("temporal_flickering", 0) > _CLIP_MAX_FLICKERING
+    )
+
+
+def _clip_is_hopeless(metrics: dict) -> bool:
+    """Check if a clip is so static that Ken Burns fallback is preferable."""
+    return metrics.get("dynamic_degree", 0) < _CLIP_HOPELESS_DYNAMIC
+
+# ---------------------------------------------------------------------------
 # IMA Studio — primary engine
 # ---------------------------------------------------------------------------
 
@@ -425,11 +458,91 @@ def generate_all_clips_v2(
             last_frame=last_frame,
         )]
 
-        # Fallback: Ken Burns slideshow if IMA fails (local ffmpeg, no API cost)
-        if result["status"] == "error":
-            msg = result.get("message", "unknown error")
+        # ── Per-clip quality gate: check IMA output, selective re-render ──
+        if result["status"] == "success":
+            clip_path = result.get("video_path", output_path)
+            metrics_v1 = _assess_clip_quality(clip_path)
+            attempts[-1]["motion_metrics"] = metrics_v1
+
+            if _clip_needs_rerender(metrics_v1):
+                logger.info(
+                    "Scene %02d quality gate: dd=%.3f ms=%.3f tf=%.3f — re-rendering...",
+                    seq,
+                    metrics_v1.get("dynamic_degree", 0),
+                    metrics_v1.get("motion_smoothness", 1),
+                    metrics_v1.get("temporal_flickering", 0),
+                )
+
+                # Render v2 to a separate path, then compare
+                v2_path = output_path.replace(".mp4", "_qg.mp4")
+                result_v2 = generate_ima_clip(
+                    image_path=first_path,
+                    motion_prompt=motion_prompt,
+                    duration=ima_dur,
+                    output_path=v2_path,
+                    aspect_ratio=aspect_ratio,
+                )
+
+                v2_attempt = video_diagnostics.build_attempt_record(
+                    engine="ima",
+                    status=result_v2.get("status", "error"),
+                    result=result_v2,
+                    requested_duration=estimated_dur,
+                    aspect_ratio=aspect_ratio,
+                    first_frame=first_frame,
+                    last_frame=last_frame,
+                    reason="quality_gate_rerender",
+                )
+
+                best_metrics = metrics_v1
+
+                if result_v2.get("status") == "success":
+                    metrics_v2 = _assess_clip_quality(v2_path)
+                    v2_attempt["motion_metrics"] = metrics_v2
+
+                    dd_v1 = metrics_v1.get("dynamic_degree", 0)
+                    dd_v2 = metrics_v2.get("dynamic_degree", 0)
+
+                    if dd_v2 >= dd_v1:
+                        # v2 wins (or tie — prefer fresher render)
+                        os.replace(v2_path, output_path)
+                        result = result_v2
+                        result["video_path"] = output_path
+                        best_metrics = metrics_v2
+                        logger.info("Scene %02d: v2 wins (dd=%.3f vs %.3f)", seq, dd_v2, dd_v1)
+                    else:
+                        # v1 wins, discard v2
+                        try:
+                            os.remove(v2_path)
+                        except OSError:
+                            pass
+                        best_metrics = metrics_v1
+                        logger.info("Scene %02d: v1 wins (dd=%.3f vs %.3f)", seq, dd_v1, dd_v2)
+                else:
+                    # v2 IMA failed, keep v1
+                    logger.info("Scene %02d: v2 IMA failed, keeping v1", seq)
+
+                attempts.append(v2_attempt)
+
+                # If best version is still hopeless → trigger Ken Burns fallback
+                if _clip_is_hopeless(best_metrics):
+                    logger.warning(
+                        "Scene %02d: best dd=%.3f < %.3f — Ken Burns fallback",
+                        seq,
+                        best_metrics.get("dynamic_degree", 0),
+                        _CLIP_HOPELESS_DYNAMIC,
+                    )
+                    result["status"] = "quality_fallback"
+
+        # Fallback: Ken Burns if IMA fails or quality is hopeless
+        if result.get("status") in ("error", "quality_fallback"):
+            reason = (
+                "quality below threshold"
+                if result.get("status") == "quality_fallback"
+                else result.get("message", "unknown error")
+            )
             logger.warning(
-                "Scene %02d IMA failed: %s — falling back to Ken Burns", seq, msg,
+                "Scene %02d falling back to Ken Burns: %s", seq, reason,
             )
             from render_slideshow import create_ken_burns_clip
 
@@ -471,8 +584,10 @@ def generate_all_clips_v2(
         return result
 
     results: list[dict] = []
-    # One thread per scene — IMA is IO-bound, GIL is not a bottleneck.
-    with ThreadPoolExecutor(max_workers=total) as executor:
+    # IMA is IO-bound, GIL is not a bottleneck. Cap at 6 to avoid
+    # overwhelming IMA API rate limits and local resource exhaustion.
+    max_workers = min(total, int(os.environ.get("RENDER_MAX_WORKERS", "6")))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(_generate_one, s): s["sequence"] for s in scene_plan}
         completed = 0
         for future in as_completed(futures):
