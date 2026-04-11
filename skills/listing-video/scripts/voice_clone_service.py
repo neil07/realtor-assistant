@@ -4,6 +4,7 @@ Voice Clone Service — 声音复刻全生命周期管理
 
 流程: 视频 → 提取音频 → 说话人分离 → 选择 → 克隆 → 试听 → 确认/拒绝
 """
+from __future__ import annotations
 
 import json
 import logging
@@ -432,6 +433,11 @@ def generate_preview(voice_id: str, output_path: str) -> dict:
 def confirm_clone(agent_phone: str, voice_id: str) -> dict:
     """经纪人确认使用克隆声音，存入 profile。"""
     import profile_manager
+
+    # Auto-create profile if it doesn't exist
+    if not profile_manager.get_profile(agent_phone):
+        profile_manager.create_profile(phone=agent_phone, name=agent_phone)
+        logger.info("Auto-created profile for %s", agent_phone)
 
     profile_manager.set_voice_clone(agent_phone, voice_id)
 

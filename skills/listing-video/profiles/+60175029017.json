@@ -1,0 +1,23 @@
+{
+  "phone": "+60175029017",
+  "name": "Neil",
+  "brokerage": "",
+  "city": "",
+  "logo_path": null,
+  "voice_clone_id": "X48cFRkqx9yGR8NLFCP9",
+  "preferences": {
+    "style": "professional",
+    "music": "modern",
+    "format": "both",
+    "show_price": true,
+    "language": "en"
+  },
+  "market_knowledge": {},
+  "stats": {
+    "videos_created": 0,
+    "first_use": "2026-04-11T03:36:00.000Z",
+    "last_use": "2026-04-11T03:36:00.000Z"
+  },
+  "voice_clone_offered": true,
+  "voice_clone_created_at": "2026-04-11T03:39:20.000Z"
+}

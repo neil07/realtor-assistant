@@ -3,6 +3,7 @@
 Listing Video Agent — Agent Profile Manager
 Stores and retrieves per-agent preferences, voice clones, and usage stats.
 """
+from __future__ import annotations
 
 import json
 from datetime import datetime

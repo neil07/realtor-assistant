@@ -8,6 +8,7 @@ Voice Clone Trigger Layer — 对话状态管理 + 意图路由
 Session 状态由 voice_clone_service 管理（文件系统），
 本模块只负责读取状态做路由决策。
 """
+from __future__ import annotations
 
 import json
 import logging

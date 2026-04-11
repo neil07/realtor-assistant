@@ -4,6 +4,7 @@ Listing Video Agent — TTS Voice Generation
 Primary: ElevenLabs (stateless, instant).
 Fallback: OpenAI TTS → IMA Studio TTS.
 """
+from __future__ import annotations
 
 import json
 import os
