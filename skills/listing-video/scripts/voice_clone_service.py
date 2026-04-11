@@ -307,11 +307,16 @@ def process_video_for_cloning(video_path: str, agent_phone: str) -> dict:
             {
                 "speaker_id": sp["speaker_id"],
                 "audio_url": sp["audio_url"],
+                "audio_path": sp["audio_path"],
                 "duration": sp["duration"],
             }
             for sp in speakers
         ],
         "single_speaker": len(speakers) == 1,
+        # MEDIA: directives for multi-speaker samples (agent includes these in reply)
+        "media_directives": "\n".join(
+            f"MEDIA:{sp['audio_path']}" for sp in speakers
+        ),
     }
 
 
@@ -377,8 +382,12 @@ def clone_selected_speaker(
         "status": "success",
         "voice_id": voice_id,
         "preview_audio_url": preview_url,
+        "preview_audio_path": preview_path,
         "preview_text": preview_result.get("text_used", ""),
-        "message": "Voice cloned successfully. Listen to the preview and confirm.",
+        "message": (
+            "Voice cloned successfully. Listen to the preview and confirm.\n\n"
+            f"MEDIA:{preview_path}"
+        ),
     }
 
 
