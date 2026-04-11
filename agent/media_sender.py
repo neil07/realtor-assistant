@@ -29,10 +29,60 @@ ALLOWED_EXTENSIONS: set[str] = {
 GCS_BUCKET = "gs://reel-agent-videos"
 GCS_PUBLIC_BASE = "https://storage.googleapis.com/reel-agent-videos"
 
+# WhatsApp media size limit (bytes). Leave 5 MB headroom.
+WHATSAPP_MAX_BYTES = 45 * 1024 * 1024  # 45 MB
+
+VIDEO_EXTENSIONS: set[str] = {".mp4", ".mov", ".webm"}
+
+
+def _compress_video_if_needed(path: str) -> str:
+    """Compress a video file with ffmpeg if it exceeds WhatsApp's size limit.
+
+    Tries CRF 28 first; if still too large, retries at CRF 32.
+    Returns the (possibly new) file path.
+    """
+    p = Path(path)
+    if p.suffix.lower() not in VIDEO_EXTENSIONS:
+        return path
+    if p.stat().st_size <= WHATSAPP_MAX_BYTES:
+        return path
+
+    original_mb = p.stat().st_size / (1024 * 1024)
+    logger.info("Video %.1f MB exceeds limit, compressing: %s", original_mb, path)
+
+    for crf in (28, 32):
+        compressed = p.with_stem(f"{p.stem}_compressed_crf{crf}")
+        cmd = [
+            "ffmpeg", "-y", "-i", str(p),
+            "-c:v", "libx264", "-crf", str(crf), "-preset", "fast",
+            "-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            str(compressed),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=300, check=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            logger.error("ffmpeg compression failed (crf=%d): %s", crf, exc)
+            return path  # return original on failure
+
+        new_mb = compressed.stat().st_size / (1024 * 1024)
+        logger.info("Compressed %.1f MB → %.1f MB (crf=%d)", original_mb, new_mb, crf)
+
+        if compressed.stat().st_size <= WHATSAPP_MAX_BYTES:
+            return str(compressed)
+
+        # Still too large — clean up and try higher CRF
+        logger.warning("Still %.1f MB after crf=%d, retrying...", new_mb, crf)
+
+    # Return whatever we got from the last attempt
+    return str(compressed)
+
 
 def format_reply_with_media(text: str, media_paths: list[str]) -> str:
     """Append MEDIA: directives to reply text for each valid media file.
 
+    Videos exceeding WhatsApp's size limit are automatically compressed.
     Only includes files that exist on disk and have an allowed extension.
 
     Args:
@@ -51,6 +101,8 @@ def format_reply_with_media(text: str, media_paths: list[str]) -> str:
         if p.suffix.lower() not in ALLOWED_EXTENSIONS:
             logger.warning("Media file extension not allowed, skipping: %s", path)
             continue
+        # Auto-compress large videos
+        path = _compress_video_if_needed(path)
         directives.append(f"MEDIA:{path}")
 
     if not directives:
