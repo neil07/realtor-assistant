@@ -105,6 +105,9 @@ class ProgressNotifier:
         video_path = result.get("video_path", "")
         video_url = _make_video_url(video_path)
 
+        # Include absolute media paths for MEDIA: directive (primary delivery)
+        media_paths = [video_path] if video_path and os.path.isfile(video_path) else []
+
         await self.client.send(url, {
             "type": "delivered",
             "job_id": job_id,
@@ -112,6 +115,7 @@ class ProgressNotifier:
             "agent_phone": job.get("agent_phone"),
             "video_url": video_url,
             "video_path": video_path,
+            "media_paths": media_paths,
             "caption": result.get("caption", ""),
             "scene_count": result.get("scene_count", 0),
             "word_count": result.get("word_count", 0),
@@ -391,7 +395,11 @@ class ProgressNotifier:
         if not url:
             return
 
-        preview_url = _make_public_url(result.get("preview_audio_path", ""))
+        preview_path = result.get("preview_audio_path", "")
+        preview_url = _make_public_url(preview_path)
+
+        # Include absolute path for MEDIA: directive (primary delivery)
+        media_paths = [preview_path] if preview_path and os.path.isfile(preview_path) else []
 
         await self.client.send(url, {
             "type": "voice_clone_result",
@@ -399,6 +407,7 @@ class ProgressNotifier:
             "status": result.get("status"),
             "voice_id": result.get("voice_id"),
             "preview_audio_url": preview_url,
+            "media_paths": media_paths,
             "message": result.get("message", ""),
         })
 

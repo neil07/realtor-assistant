@@ -249,6 +249,31 @@ Each state maps to one or more Skills. Transitions are strict — no skipping.
 
 ---
 
+## Media Delivery (MEDIA: Directive)
+
+When your reply includes a media file (video, audio preview, image), append a
+`MEDIA:` directive on its own line at the end of the reply text:
+
+```
+Your listing video is ready!
+
+MEDIA:/absolute/path/to/video.mp4
+```
+
+OpenClaw extracts each `MEDIA:` line and sends the file as a WhatsApp media
+attachment. Multiple files are supported (one `MEDIA:` line per file).
+
+**Allowed extensions:** mp3, mp4, ogg, wav, jpg, jpeg, png, webp
+
+**Fallback:** If the MEDIA: directive fails, upload to GCS
+(`gs://reel-agent-videos/`) and send the public URL inline instead.
+
+This is handled automatically by `agent/media_sender.py` — the server appends
+MEDIA: directives for all media-producing flows (video delivery, voice clone
+previews, speaker samples, daily insight images).
+
+---
+
 ## Memory
 
 - Agent profiles stored in `skills/listing-video/profiles/{phone}.json`

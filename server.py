@@ -249,6 +249,18 @@ def _video_url(video_path: str) -> str | None:
         return None
 
 
+def _resolve_output_url(output_url: str) -> str | None:
+    """Convert a relative ``/output/...`` URL back to an absolute filesystem path.
+
+    Returns the path only if the file exists on disk.
+    """
+    if not output_url or not output_url.startswith("/output/"):
+        return None
+    rel = output_url[len("/output/"):]
+    abs_path = str(OUTPUT_BASE / rel)
+    return abs_path if os.path.isfile(abs_path) else None
+
+
 def _load_json_file(path: Path) -> dict | None:
     if not path.exists() or not path.is_file():
         return None
@@ -1407,6 +1419,7 @@ async def handle_message(
 
     # ── Voice clone flow dispatch ──────────────────────────────────
     intent = result.get("intent", "")
+    media_paths: list[str] = []  # collect media files to attach via MEDIA: directive
 
     if intent == "voice_clone_media" and payload.media_paths:
         # User sent media with voice clone context → process it
@@ -1441,6 +1454,10 @@ async def handle_message(
                     if auto_clone.get("status") == "success":
                         result["voice_id"] = auto_clone["voice_id"]
                         result["preview_audio_url"] = auto_clone.get("preview_audio_url")
+                        # Resolve preview to absolute path for MEDIA: directive
+                        preview_abs = _resolve_output_url(auto_clone.get("preview_audio_url", ""))
+                        if preview_abs:
+                            media_paths.append(preview_abs)
                         result["response"] = (
                             "I detected one voice in your recording. "
                             "Here's how it sounds — reply 'yes' to confirm, "
@@ -1453,6 +1470,11 @@ async def handle_message(
                         )
                 else:
                     n = len(clone_result["speakers"])
+                    # Attach speaker sample audio files
+                    for sp in clone_result.get("speakers", []):
+                        sp_abs = _resolve_output_url(sp.get("audio_url", ""))
+                        if sp_abs:
+                            media_paths.append(sp_abs)
                     result["response"] = (
                         f"I detected {n} voices in your recording. "
                         "Which one is yours? Listen to each sample "
@@ -1506,6 +1528,10 @@ async def handle_message(
         if clone_result.get("status") == "success":
             result["voice_id"] = clone_result["voice_id"]
             result["preview_audio_url"] = clone_result.get("preview_audio_url")
+            # Resolve preview to absolute path for MEDIA: directive
+            preview_abs = _resolve_output_url(clone_result.get("preview_audio_url", ""))
+            if preview_abs:
+                media_paths.append(preview_abs)
             result["response"] = (
                 "Here's how your cloned voice sounds. "
                 "Reply 'yes' to confirm, or 'no' to keep the default."
@@ -1571,6 +1597,16 @@ async def handle_message(
             await asyncio.to_thread(profile_manager.update_profile, phone, activation_updates)
         except Exception:
             pass
+
+    # ── Append MEDIA: directives for any collected media files ────
+    if media_paths:
+        from agent.media_sender import format_reply_with_media
+
+        result["media_paths"] = media_paths
+        if result.get("response"):
+            result["response"] = format_reply_with_media(
+                result["response"], media_paths,
+            )
 
     return result
 
