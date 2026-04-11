@@ -1092,6 +1092,9 @@ def _classify_intent(
     profile: dict | None,
     last_job: dict | None,
     bridge_agent_state: dict | None = None,
+    active_clone_session: dict | None = None,
+    media_paths: list[str] | None = None,
+    agent_phone: str = "",
 ) -> dict:
     """
     [TEST-ONLY in production] Keyword-based intent classifier.
@@ -1107,25 +1110,34 @@ def _classify_intent(
     This is the text-command fallback — every button interaction
     has a text equivalent so buttonless channels work identically.
     """
+    from agent.voice_clone_handler import (
+        classify_voice_clone_intent,
+        should_route_media_to_voice_clone,
+    )
+
     t = text.strip().lower()
     words = set(t.split())
     post_render_context = _infer_post_render_context(last_job, bridge_agent_state)
 
-    # 0. Voice clone request (text keywords)
-    _VOICE_CLONE_KEYWORDS = {
-        "clone my voice", "use my voice", "voice clone",
-        "克隆声音", "用我的声音", "克隆我的声音",
-    }
-    if any(kw in t for kw in _VOICE_CLONE_KEYWORDS):
+    # 0. Voice clone conversation flow (multi-turn state check)
+    # If user is mid-flow (awaiting selection or confirmation), route there first.
+    vc_result = classify_voice_clone_intent(
+        text, has_media, agent_phone, active_clone_session,
+    )
+    if vc_result:
+        return vc_result
+
+    # 0b. Media + voice clone context → route to voice clone instead of listing video
+    if has_media and should_route_media_to_voice_clone(
+        text, media_paths or [], agent_phone,
+    ):
         return {
-            "intent": "voice_clone",
-            "action": "request_voice_clone",
+            "intent": "voice_clone_media",
+            "action": "process_voice_sample",
             "response": (
-                "I can clone your voice! Send me a short video of yourself "
-                "talking (30+ seconds) and I'll create a voice that sounds like you "
-                "for all your listing videos."
+                "Got your voice sample! Processing it now... "
+                "This may take a minute. 🎙️"
             ),
-            "awaiting": "voice_sample_video",
         }
 
     # 1. Media present → listing video request (asset-first)
@@ -1349,6 +1361,11 @@ async def handle_message(
       "stop push"          → intent: stop_push      → POST /webhook/in {action: disable_daily_push}
     """
     import profile_manager
+    from agent.voice_clone_handler import (
+        build_proactive_offer,
+        download_media_to_temp,
+        get_active_clone_session,
+    )
 
     phone = payload.agent_phone
     profile = await asyncio.to_thread(profile_manager.get_profile, phone)
@@ -1365,7 +1382,19 @@ async def handle_message(
 
     bridge_agent_state = _read_bridge_agent_state(phone)
 
-    result = _classify_intent(payload.text, payload.has_media, profile, last_job, bridge_agent_state)
+    # Check for active voice clone session (multi-turn state)
+    active_clone_session = await asyncio.to_thread(get_active_clone_session, phone)
+
+    result = _classify_intent(
+        payload.text,
+        payload.has_media,
+        profile,
+        last_job,
+        bridge_agent_state,
+        active_clone_session=active_clone_session,
+        media_paths=payload.media_paths,
+        agent_phone=phone,
+    )
 
     _structured_log(
         "intent_classified",
@@ -1376,13 +1405,126 @@ async def handle_message(
         has_profile=profile is not None,
     )
 
+    # ── Voice clone flow dispatch ──────────────────────────────────
+    intent = result.get("intent", "")
+
+    if intent == "voice_clone_media" and payload.media_paths:
+        # User sent media with voice clone context → process it
+        media_path = await asyncio.to_thread(
+            download_media_to_temp, payload.media_paths[0],
+        )
+        if media_path:
+            import voice_clone_service
+
+            clone_result = await asyncio.to_thread(
+                voice_clone_service.process_video_for_cloning,
+                media_path,
+                phone,
+            )
+            if clone_result.get("status") == "success":
+                result["session_id"] = clone_result["session_id"]
+                result["speakers"] = clone_result.get("speakers", [])
+                result["single_speaker"] = clone_result.get("single_speaker", False)
+
+                # Single speaker → auto-clone + preview
+                if clone_result.get("single_speaker"):
+                    agent_name = (
+                        (profile.get("name", "") if profile else "") or phone
+                    )
+                    auto_clone = await asyncio.to_thread(
+                        voice_clone_service.clone_selected_speaker,
+                        phone,
+                        clone_result["session_id"],
+                        clone_result["speakers"][0]["speaker_id"],
+                        agent_name,
+                    )
+                    if auto_clone.get("status") == "success":
+                        result["voice_id"] = auto_clone["voice_id"]
+                        result["preview_audio_url"] = auto_clone.get("preview_audio_url")
+                        result["response"] = (
+                            "I detected one voice in your recording. "
+                            "Here's how it sounds — reply 'yes' to confirm, "
+                            "or 'no' to keep the default."
+                        )
+                    else:
+                        result["response"] = (
+                            f"Voice cloning failed: {auto_clone.get('message', 'unknown error')}. "
+                            "Please try with a different recording."
+                        )
+                else:
+                    n = len(clone_result["speakers"])
+                    result["response"] = (
+                        f"I detected {n} voices in your recording. "
+                        "Which one is yours? Listen to each sample "
+                        "and reply with the number (1, 2, ...)."
+                    )
+            else:
+                result["response"] = (
+                    f"Could not process your recording: "
+                    f"{clone_result.get('message', 'unknown error')}. "
+                    "Please try again with a 30+ second video or audio."
+                )
+        else:
+            result["response"] = (
+                "Could not download your media file. "
+                "Please try sending it again."
+            )
+
+    elif intent == "voice_clone_confirm":
+        import voice_clone_service
+
+        confirm_result = await asyncio.to_thread(
+            voice_clone_service.confirm_clone,
+            phone,
+            result["voice_id"],
+        )
+        result["confirm_result"] = confirm_result
+
+    elif intent == "voice_clone_reject":
+        import voice_clone_service
+
+        reject_result = await asyncio.to_thread(
+            voice_clone_service.reject_clone,
+            phone,
+            result["voice_id"],
+        )
+        result["reject_result"] = reject_result
+
+    elif intent == "voice_clone_select":
+        import voice_clone_service
+
+        profile_data = profile or {}
+        agent_name = profile_data.get("name", "") or phone
+
+        clone_result = await asyncio.to_thread(
+            voice_clone_service.clone_selected_speaker,
+            phone,
+            result["session_id"],
+            result["speaker_id"],
+            agent_name,
+        )
+        if clone_result.get("status") == "success":
+            result["voice_id"] = clone_result["voice_id"]
+            result["preview_audio_url"] = clone_result.get("preview_audio_url")
+            result["response"] = (
+                "Here's how your cloned voice sounds. "
+                "Reply 'yes' to confirm, or 'no' to keep the default."
+            )
+        else:
+            result["response"] = (
+                f"Cloning failed: {clone_result.get('message', 'unknown error')}. "
+                "Please try again."
+            )
+
+    # ── Standard enrichment ────────────────────────────────────────
+
     # Add text-command hints for the next step (so OpenClaw can show them)
-    text_hints = _get_text_hints(result["intent"], profile)
+    text_hints = _get_text_hints(intent, profile)
     result["text_commands"] = text_hints
     result["agent_phone"] = phone
     result["has_profile"] = profile is not None
-    result["recommended_path"] = _infer_recommended_path(result["intent"], profile)
-    if result["intent"] in {
+    result["recommended_path"] = _infer_recommended_path(intent, profile)
+    if intent in {
         "app_question",
         "trust_question",
         "pricing_question",
@@ -1407,6 +1549,19 @@ async def handle_message(
             "• energetic 🔥"
         )
         result["awaiting"] = "style_selection"
+
+    # Proactive voice clone offer (after first successful video)
+    if (
+        intent not in {
+            "voice_clone", "voice_clone_media", "voice_clone_confirm",
+            "voice_clone_reject", "voice_clone_select", "voice_clone_pending",
+            "voice_clone_offer",
+        }
+        and not active_clone_session
+    ):
+        offer = await asyncio.to_thread(build_proactive_offer, phone)
+        if offer:
+            result["voice_clone_offer"] = offer
 
     if profile and result.get("recommended_path"):
         activation_updates = {
@@ -1471,6 +1626,26 @@ def _get_text_hints(
         return {
             "next": "Refine again or publish",
             "examples": ["shorter", "more professional", "publish", "skip"],
+        }
+    if intent in ("voice_clone", "voice_clone_media"):
+        return {
+            "next": "Send a 30+ second video or audio of yourself",
+            "examples": ["(send video/audio)", "cancel"],
+        }
+    if intent == "voice_clone_select":
+        return {
+            "next": "Listen to the preview and confirm",
+            "examples": ["yes", "no", "retry"],
+        }
+    if intent in ("voice_clone_confirm", "voice_clone_reject"):
+        return {
+            "next": "Send photos or say help",
+            "examples": ["(send photos)", "help"],
+        }
+    if intent == "voice_clone_pending":
+        return {
+            "next": "Confirm or reject the voice preview",
+            "examples": ["yes", "no"],
         }
     return {
         "next": "Send photos or say help",
