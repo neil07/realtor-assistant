@@ -164,20 +164,47 @@ def generate_openai_tts(
 # Voice Cloning (ElevenLabs)
 # ---------------------------------------------------------------------------
 
+_MIME_MAP = {
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/opus",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".webm": "audio/webm",
+}
+
+
 def clone_voice(
-    audio_sample_path: str,
+    audio_sample_paths: str | list[str],
     agent_name: str,
     description: str = "Real estate agent voiceover",
 ) -> dict:
-    """Clone an agent's voice from a sample recording."""
+    """Clone an agent's voice from one or more sample recordings.
+
+    Args:
+        audio_sample_paths: Single path or list of paths to audio samples.
+        agent_name: Name for the cloned voice (prefixed with RE_Agent_).
+        description: Voice description for ElevenLabs.
+    """
     api_key = os.environ.get("ELEVENLABS_API_KEY")
     if not api_key:
         return {"status": "error", "message": "ELEVENLABS_API_KEY not set"}
 
+    if isinstance(audio_sample_paths, str):
+        audio_sample_paths = [audio_sample_paths]
+
     headers = {"xi-api-key": api_key}
 
-    with open(audio_sample_path, "rb") as f:
-        files = {"files": (Path(audio_sample_path).name, f, "audio/mpeg")}
+    files_list = []
+    open_handles = []
+    try:
+        for path in audio_sample_paths:
+            ext = Path(path).suffix.lower()
+            mime = _MIME_MAP.get(ext, "audio/mpeg")
+            f = open(path, "rb")
+            open_handles.append(f)
+            files_list.append(("files", (Path(path).name, f, mime)))
+
         data = {
             "name": f"RE_Agent_{agent_name}",
             "description": description,
@@ -187,8 +214,12 @@ def clone_voice(
             f"{ELEVENLABS_API}/voices/add",
             headers=headers,
             data=data,
-            files=files,
+            files=files_list,
+            timeout=60,
         )
+    finally:
+        for f in open_handles:
+            f.close()
 
     if resp.status_code != 200:
         return {"status": "error", "message": f"Voice clone error: {resp.text[:200]}"}
@@ -197,8 +228,27 @@ def clone_voice(
     return {
         "status": "success",
         "voice_id": voice_id,
+        "voice_name": f"RE_Agent_{agent_name}",
         "message": f"Voice cloned! ID: {voice_id}",
     }
+
+
+def delete_voice(voice_id: str) -> dict:
+    """Delete a cloned voice from ElevenLabs."""
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        return {"status": "error", "message": "ELEVENLABS_API_KEY not set"}
+
+    resp = requests.delete(
+        f"{ELEVENLABS_API}/voices/{voice_id}",
+        headers={"xi-api-key": api_key},
+        timeout=30,
+    )
+
+    if resp.status_code not in (200, 204):
+        return {"status": "error", "message": f"Delete error: {resp.text[:200]}"}
+
+    return {"status": "success", "message": f"Voice {voice_id} deleted"}
 
 
 # ---------------------------------------------------------------------------

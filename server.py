@@ -1111,6 +1111,23 @@ def _classify_intent(
     words = set(t.split())
     post_render_context = _infer_post_render_context(last_job, bridge_agent_state)
 
+    # 0. Voice clone request (text keywords)
+    _VOICE_CLONE_KEYWORDS = {
+        "clone my voice", "use my voice", "voice clone",
+        "克隆声音", "用我的声音", "克隆我的声音",
+    }
+    if any(kw in t for kw in _VOICE_CLONE_KEYWORDS):
+        return {
+            "intent": "voice_clone",
+            "action": "request_voice_clone",
+            "response": (
+                "I can clone your voice! Send me a short video of yourself "
+                "talking (30+ seconds) and I'll create a voice that sounds like you "
+                "for all your listing videos."
+            ),
+            "awaiting": "voice_sample_video",
+        }
+
     # 1. Media present → listing video request (asset-first)
     if has_media:
         return {
@@ -1579,6 +1596,7 @@ async def get_profile(phone: str):
         "branding_colors": content.get("branding_colors"),
         "daily_push_enabled": content.get("daily_push_enabled", True),
         "videos_created": profile.get("stats", {}).get("videos_created", 0),
+        "voice_clone_id": profile.get("voice_clone_id"),
     }
 
 
@@ -1669,6 +1687,199 @@ async def manual_override(
         return {"job_id": job_id, "action": "marked_delivered"}
 
     raise HTTPException(400, f"Unknown action: {action}")
+
+
+# ---------------------------------------------------------------------------
+# Webhook: Voice Clone (3-round interaction)
+# ---------------------------------------------------------------------------
+
+
+class VoiceClonePayload(BaseModel):
+    agent_phone: str
+    video_path: str  # video file already saved to disk by OpenClaw
+    agent_name: str = ""
+    callback_url: str | None = None
+    openclaw_msg_id: str | None = None
+
+
+class SelectSpeakerPayload(BaseModel):
+    agent_phone: str
+    session_id: str
+    speaker_id: str  # "speaker_0", "speaker_1", ...
+    agent_name: str = ""
+
+
+class VoiceCloneConfirmPayload(BaseModel):
+    agent_phone: str
+    voice_id: str
+
+
+class VoiceCloneRejectPayload(BaseModel):
+    agent_phone: str
+    voice_id: str
+
+
+@app.post("/webhook/voice-clone")
+async def webhook_voice_clone(
+    payload: VoiceClonePayload,
+    _auth: None = Depends(_require_backend_auth),
+):
+    """
+    Round 1: Receive video → extract audio → speaker diarization.
+
+    Returns speaker candidates for the agent to choose from.
+    If only one speaker detected, auto-clones and returns preview.
+    """
+    import profile_manager
+    import voice_clone_service
+
+    _structured_log(
+        "voice_clone_start",
+        agent_phone=payload.agent_phone,
+        video_path=payload.video_path,
+    )
+
+    result = await asyncio.to_thread(
+        voice_clone_service.process_video_for_cloning,
+        payload.video_path,
+        payload.agent_phone,
+    )
+
+    if result.get("status") != "success":
+        raise HTTPException(400, result.get("message", "Processing failed"))
+
+    # Single speaker → auto-clone + preview, skip selection round
+    if result.get("single_speaker"):
+        profile = await asyncio.to_thread(
+            profile_manager.get_profile, payload.agent_phone
+        )
+        agent_name = payload.agent_name or (
+            profile.get("name", "") if profile else ""
+        ) or payload.agent_phone
+
+        clone_result = await asyncio.to_thread(
+            voice_clone_service.clone_selected_speaker,
+            payload.agent_phone,
+            result["session_id"],
+            result["speakers"][0]["speaker_id"],
+            agent_name,
+        )
+
+        if clone_result.get("status") != "success":
+            raise HTTPException(500, clone_result.get("message", "Clone failed"))
+
+        return {
+            **clone_result,
+            "skipped_selection": True,
+            "session_id": result["session_id"],
+            "message": (
+                "I detected one voice in your video. "
+                "Here's how it sounds — reply 'use this voice' to confirm, "
+                "or 'no thanks' to keep the default."
+            ),
+        }
+
+    # Multiple speakers → return candidates
+    return {
+        **result,
+        "message": (
+            f"I detected {len(result['speakers'])} voices in your video. "
+            "Which one is yours? Listen to each sample and reply with the number."
+        ),
+    }
+
+
+@app.post("/webhook/voice-clone/select-speaker")
+async def webhook_select_speaker(
+    payload: SelectSpeakerPayload,
+    _auth: None = Depends(_require_backend_auth),
+):
+    """
+    Round 2: Agent selects their speaker → clone + generate preview.
+    """
+    import profile_manager
+    import voice_clone_service
+
+    _structured_log(
+        "voice_clone_select",
+        agent_phone=payload.agent_phone,
+        session_id=payload.session_id,
+        speaker_id=payload.speaker_id,
+    )
+
+    profile = await asyncio.to_thread(
+        profile_manager.get_profile, payload.agent_phone
+    )
+    agent_name = payload.agent_name or (
+        profile.get("name", "") if profile else ""
+    ) or payload.agent_phone
+
+    result = await asyncio.to_thread(
+        voice_clone_service.clone_selected_speaker,
+        payload.agent_phone,
+        payload.session_id,
+        payload.speaker_id,
+        agent_name,
+    )
+
+    if result.get("status") != "success":
+        raise HTTPException(500, result.get("message", "Clone failed"))
+
+    return {
+        **result,
+        "message": (
+            "Here's how your cloned voice sounds. "
+            "Reply 'use this voice' to confirm, or 'no thanks' to keep the default."
+        ),
+    }
+
+
+@app.post("/webhook/voice-clone/confirm")
+async def webhook_voice_clone_confirm(
+    payload: VoiceCloneConfirmPayload,
+    _auth: None = Depends(_require_backend_auth),
+):
+    """
+    Round 3a: Agent confirms → store voice_clone_id in profile.
+    """
+    import voice_clone_service
+
+    _structured_log(
+        "voice_clone_confirm",
+        agent_phone=payload.agent_phone,
+        voice_id=payload.voice_id,
+    )
+
+    result = await asyncio.to_thread(
+        voice_clone_service.confirm_clone,
+        payload.agent_phone,
+        payload.voice_id,
+    )
+    return result
+
+
+@app.post("/webhook/voice-clone/reject")
+async def webhook_voice_clone_reject(
+    payload: VoiceCloneRejectPayload,
+    _auth: None = Depends(_require_backend_auth),
+):
+    """
+    Round 3b: Agent rejects → delete cloned voice from ElevenLabs.
+    """
+    import voice_clone_service
+
+    _structured_log(
+        "voice_clone_reject",
+        agent_phone=payload.agent_phone,
+        voice_id=payload.voice_id,
+    )
+
+    result = await asyncio.to_thread(
+        voice_clone_service.reject_clone,
+        payload.agent_phone,
+        payload.voice_id,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------

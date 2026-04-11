@@ -752,6 +752,17 @@ class Dispatcher:
             "caption": script.get("caption", ""),
         }, job)
 
+        # Offer voice cloning after first successful delivery
+        if job["agent_phone"]:
+            should_offer = await asyncio.to_thread(
+                profile_manager.should_offer_voice_clone, job["agent_phone"]
+            )
+            if should_offer:
+                await self.notifier.notify_voice_clone_offer(job_id, job)
+                await asyncio.to_thread(
+                    profile_manager.mark_voice_clone_offered, job["agent_phone"]
+                )
+
 
 def _recommend_style(estimated_tier: str) -> str:
     """Map property tier from photo analysis to a video style.

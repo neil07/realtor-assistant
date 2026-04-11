@@ -359,6 +359,49 @@ class ProgressNotifier:
             "agent_name": agent.get("name", ""),
         })
 
+    async def notify_voice_clone_offer(
+        self,
+        job_id: str,
+        job: dict,
+    ) -> None:
+        """Suggest voice cloning to agent after their first successful video."""
+        url = job.get("callback_url") or self._build_url("/events")
+        if not url:
+            return
+
+        await self.client.send(url, {
+            "type": "voice_clone_offer",
+            "job_id": job_id,
+            "openclaw_msg_id": job.get("openclaw_msg_id"),
+            "agent_phone": job.get("agent_phone"),
+            "message": (
+                "Your video is ready! Want future videos to sound like YOU? "
+                "Send a short video of yourself talking (30+ seconds) "
+                "and I'll clone your voice for all future videos."
+            ),
+        })
+
+    async def notify_voice_clone_result(
+        self,
+        agent_phone: str,
+        result: dict,
+    ) -> None:
+        """Push voice clone result (preview audio) to the agent."""
+        url = self._build_url("/events")
+        if not url:
+            return
+
+        preview_url = _make_public_url(result.get("preview_audio_path", ""))
+
+        await self.client.send(url, {
+            "type": "voice_clone_result",
+            "agent_phone": agent_phone,
+            "status": result.get("status"),
+            "voice_id": result.get("voice_id"),
+            "preview_audio_url": preview_url,
+            "message": result.get("message", ""),
+        })
+
     def _build_url(self, path: str) -> str:
         base = self._base_url.rstrip("/")
         return f"{base}{path}" if base else ""

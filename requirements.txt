@@ -20,6 +20,12 @@ python-dotenv>=1.0.0
 Pillow>=10.0.0
 opencv-python>=4.8.0
 mutagen>=1.47.0
+pydub>=0.25.1
+
+# Voice clone — speaker diarization
+pyannote.audio>=3.1.0
+torch>=2.0.0
+torchaudio>=2.0.0
 
 # Async SQLite (orchestration layer)
 aiosqlite>=0.20.0

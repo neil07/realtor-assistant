@@ -130,6 +130,7 @@ def create_profile(
         },
         "activation": {**_DEFAULT_ACTIVATION},
         "voice_clone_offered": False,
+        "voice_clone_created_at": None,
     }
 
     _ensure_profile_defaults(profile)
@@ -338,6 +339,15 @@ def get_preference_context(phone: str) -> str:
 def set_voice_clone(phone: str, voice_id: str) -> dict:
     """Store the cloned voice ID for an agent."""
     return update_profile(phone, {"voice_clone_id": voice_id})
+
+
+def clear_voice_clone(phone: str) -> dict:
+    """Remove voice clone from profile, allow re-offering in the future."""
+    return update_profile(phone, {
+        "voice_clone_id": None,
+        "voice_clone_offered": False,
+        "voice_clone_created_at": None,
+    })
 
 
 def set_logo(phone: str, logo_path: str) -> dict:
