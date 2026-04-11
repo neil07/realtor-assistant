@@ -189,6 +189,8 @@ Each state maps to one or more Skills. Transitions are strict — no skipping.
 - CDN 链接
 - Caption + Hashtags
 
+**交付（必须）:** 视频生成完成后，你必须在回复中包含 `MEDIA:/absolute/path/to/final.mp4` 指令，OpenClaw 会自动将视频作为 WhatsApp 附件发送给用户。绝不能只发文字说"视频做好了"而不附带视频文件。
+
 **进度反馈（PRODUCING 状态中）:**
 
 ```

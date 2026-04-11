@@ -108,6 +108,11 @@ class ProgressNotifier:
         # Include absolute media paths for MEDIA: directive (primary delivery)
         media_paths = [video_path] if video_path and os.path.isfile(video_path) else []
 
+        # Build delivery message with MEDIA: directive so agent sends video automatically
+        delivery_msg = "✅ Your video is ready!"
+        if media_paths:
+            delivery_msg += "\n\n" + "\n".join(f"MEDIA:{p}" for p in media_paths)
+
         await self.client.send(url, {
             "type": "delivered",
             "job_id": job_id,
@@ -116,6 +121,7 @@ class ProgressNotifier:
             "video_url": video_url,
             "video_path": video_path,
             "media_paths": media_paths,
+            "message": delivery_msg,
             "caption": result.get("caption", ""),
             "scene_count": result.get("scene_count", 0),
             "word_count": result.get("word_count", 0),
