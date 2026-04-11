@@ -4,7 +4,7 @@
   "brokerage": "",
   "city": "",
   "logo_path": null,
-  "voice_clone_id": "X48cFRkqx9yGR8NLFCP9",
+  "voice_clone_id": "gpaEdmD5PyTW4Ic4B4vl",
   "preferences": {
     "style": "professional",
     "music": "modern",
@@ -16,8 +16,20 @@
   "stats": {
     "videos_created": 0,
     "first_use": "2026-04-11T03:36:00.000Z",
-    "last_use": "2026-04-11T03:36:00.000Z"
+    "last_use": "2026-04-11T12:56:30.259980"
   },
   "voice_clone_offered": true,
-  "voice_clone_created_at": "2026-04-11T03:39:20.000Z"
+  "voice_clone_created_at": "2026-04-11T03:39:20.000Z",
+  "learned_patterns": {
+    "style_confirmed": [],
+    "music_rejected": [],
+    "always_include": [],
+    "frequently_requested": []
+  },
+  "revision_history": [],
+  "activation": {
+    "last_successful_path": "",
+    "last_recommended_path": "",
+    "first_value_seen": false
+  }
 }
